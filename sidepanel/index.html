@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Request Override</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app-shell" class="app-shell expanded">
+    <button id="panel-toggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-content" data-i18n-aria="collapse_panel" data-i18n-title="collapse_panel">
+      <span id="toggle-arrow" class="toggle-arrow" aria-hidden="true">←</span>
+      <span class="toggle-logo" aria-hidden="true">R</span>
+      <span id="strip-status" class="strip-status" aria-hidden="true"></span>
+      <span id="strip-count" class="strip-count" aria-hidden="true">0</span>
+    </button>
+
+    <div id="panel-content" class="panel-content">
+      <header class="app-header">
+        <div class="header-top">
+          <div class="brand">
+            <span class="brand-logo" aria-hidden="true">R</span>
+            <span class="brand-title">Request Override</span>
+          </div>
+          <select id="lang-select" class="lang-select" data-i18n-aria="language_label">
+            <option value="ru">Русский</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <nav class="tabs" role="tablist" aria-label="Request Override panels">
+          <button id="tab-requests" class="tab" type="button" role="tab" aria-selected="true" aria-controls="panel-requests" tabindex="0" data-i18n="tab_requests">Requests</button>
+          <button id="tab-rules" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-rules" tabindex="-1" data-i18n="tab_rules">Rules</button>
+        </nav>
+      </header>
+
+      <section class="mode-bar" aria-label="Mocking mode">
+        <div class="mode-toggles">
+          <label class="check">
+            <input type="checkbox" id="net-mode" checked />
+            <span class="box" aria-hidden="true"></span>
+            <span class="check-label" data-i18n="mode_network">Network-level mock</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="mask-urls" />
+            <span class="box" aria-hidden="true"></span>
+            <span class="check-label" data-i18n="mode_mask">Mask query params</span>
+          </label>
+        </div>
+        <div id="net-status" class="net-status" role="status" aria-live="polite" data-i18n="status_checking">Checking…</div>
+      </section>
+
+      <section id="panel-requests" class="panel" role="tabpanel" aria-labelledby="tab-requests">
+        <div class="panel-toolbar">
+          <div class="toolbar-actions">
+            <button id="btn-refresh" class="btn icon" type="button" data-i18n-aria="refresh" data-i18n-title="refresh">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button id="btn-diag" class="btn icon" type="button" data-i18n-aria="diagnostics" data-i18n-title="diagnostics">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M2 8h3l2-4 2 8 2-4h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button id="btn-clear" class="btn icon" type="button" data-i18n-aria="clear_logs" data-i18n-title="clear_logs">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M3 4h10M6 4V3h4v1M5 4l1 9h4l1-9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+        <div id="req-list" class="req-list"></div>
+        <div id="req-empty" class="empty" data-i18n="empty_requests">No requests yet. Interact with the page…</div>
+      </section>
+
+      <section id="panel-rules" class="panel hidden" role="tabpanel" aria-labelledby="tab-rules">
+        <div class="panel-toolbar">
+          <button id="btn-add-rule" class="btn primary" type="button" data-i18n="add_rule">Add rule</button>
+        </div>
+        <div id="rules-list" class="rules-list"></div>
+        <div id="rules-empty" class="empty" data-i18n="empty_rules">No rules. Right-click a request to create one.</div>
+      </section>
+    </div>
+  </div>
+
+  <dialog id="modal" class="modal" aria-labelledby="modal-title">
+    <div class="modal-header">
+      <h2 id="modal-title" data-i18n="modal_title_new">New rule</h2>
+      <button id="modal-close" class="btn icon" type="button" data-i18n-aria="close" data-i18n-title="close">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body">
+      <label class="field">
+        <span data-i18n="url_pattern">URL pattern</span>
+        <input id="rule-url" type="text" data-i18n-placeholder="url_pattern_ph" placeholder="https://api.example.com/users/42 or /users/42" />
+      </label>
+
+      <div class="field-row">
+        <label class="check match-option">
+          <input type="radio" name="match-type" value="substring" checked />
+          <span class="radio" aria-hidden="true"></span>
+          <span data-i18n="match_substring">Substring</span>
+        </label>
+        <label class="check match-option">
+          <input type="radio" name="match-type" value="regex" />
+          <span class="radio" aria-hidden="true"></span>
+          <span data-i18n="match_regex">Regex</span>
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span data-i18n="method">Method</span>
+          <select id="rule-method"></select>
+        </label>
+        <label class="field">
+          <span data-i18n="status_code">Status code</span>
+          <input id="rule-status" type="number" min="100" max="599" value="200" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span data-i18n="status_text">Status text</span>
+        <input id="rule-status-text" type="text" data-i18n-placeholder="status_text_ph" placeholder="OK, Not Found, etc." />
+      </label>
+
+      <label class="field">
+        <span data-i18n="content_type">Content-Type</span>
+        <input id="rule-content-type" type="text" data-i18n-placeholder="content_type_ph" placeholder="application/json; charset=utf-8" />
+      </label>
+
+      <label class="field">
+        <span data-i18n="body">Body</span>
+        <textarea id="rule-body" rows="6" data-i18n-placeholder="body_ph" placeholder='{"ok":true}'></textarea>
+      </label>
+
+      <label class="field">
+        <span data-i18n="delay">Delay (ms)</span>
+        <input id="rule-delay" type="number" min="0" max="60000" step="10" placeholder="0" />
+      </label>
+
+      <label class="check modal-check">
+        <input type="checkbox" id="rule-enabled" checked />
+        <span class="box" aria-hidden="true"></span>
+        <span data-i18n="enabled">Enabled</span>
+      </label>
+    </div>
+
+    <div class="modal-actions">
+      <span id="field-error" class="field-error" role="alert"></span>
+      <button id="btn-cancel" class="btn" type="button" data-i18n="cancel">Cancel</button>
+      <button id="btn-save-rule" class="btn primary" type="button" data-i18n="save_rule">Save rule</button>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

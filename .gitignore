@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+opencode-*.log
+node_modules/
+dist/
+tmp/
+*.tmp
+*.swp
