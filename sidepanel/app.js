@@ -1,879 +1,706 @@
-const MAX_RULES = 100;
-const MAX_PATTERN_LEN = 1000;
-const MAX_STATUS_TEXT_LEN = 200;
-const MAX_CONTENT_TYPE_LEN = 300;
-const MAX_BODY_BYTES = 1024 * 1024;
-const MAX_DELAY_MS = 60000;
-const HTTP_METHODS = new Set(["", "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]);
+(() => {
+  "use strict";
 
-const I18N = {
-  ru: {
-    app_name: "Request Override",
-    language_label: "Язык",
-    tab_requests: "Запросы",
-    tab_rules: "Правила",
-    mode_network: "Сетевой перехват",
-    mode_mask: "Маскировать query-параметры",
-    status_checking: "Проверка состояния…",
-    status_attached: "Сетевой перехват активен для вкладки {tabId}",
-    status_off: "Сетевой перехват выключен — режим в странице",
-    status_error_detail: "Ошибка: {error}",
-    status_no_tab: "Нет активной http(s)-вкладки",
-    refresh: "Обновить",
-    diagnostics: "Диагностика",
-    clear_logs: "Очистить журнал",
-    empty_requests: "Запросов пока нет. Выполните fetch/XHR-запросы на странице.",
-    empty_rules: "Правил нет. Правый клик по запросу создаст правило.",
-    add_rule: "Добавить правило",
-    rule_enabled: "Включить правило",
-    rule_disabled: "Отключить правило",
-    edit_rule: "Изменить",
-    delete_rule: "Удалить",
-    copy_url: "Скопировать URL",
-    copied: "Скопировано",
-    collapse_panel: "Свернуть панель",
-    expand_panel: "Развернуть панель",
-    modal_title_new: "Новое правило",
-    modal_title_edit: "Изменить правило",
-    url_pattern: "URL-паттерн",
-    url_pattern_ph: "https://api.example.com/users/42 или /users/42",
-    match_substring: "Подстрока",
-    match_regex: "Регулярное выражение",
-    method: "Метод",
-    any_method: "Любой",
-    status_code: "Код статуса",
-    status_text: "Статус-текст",
-    status_text_ph: "OK, Not Found и т.п.",
-    content_type: "Content-Type",
-    content_type_ph: "application/json; charset=utf-8",
-    body: "Тело ответа",
-    body_ph: '{"ok":true}',
-    delay: "Задержка, мс",
-    enabled: "Включено",
-    cancel: "Отмена",
-    save_rule: "Сохранить правило",
-    close: "Закрыть",
-    error_url_required: "Введите URL-паттерн",
-    error_status_required: "Код статуса должен быть числом от 100 до 599",
-    error_regex: "Некорректное регулярное выражение",
-    error_body: "Тело не должно быть больше 1 МБ",
-    error_delay: "Задержка должна быть от 0 до 60000 мс",
-    error_rules_limit: "Максимум 100 правил",
-    error_storage: "Не удалось сохранить данные",
-    mocked: "MOCKED",
-    any_method_label: "ANY",
-    request_aria: "Запрос {method} {name}. Статус {status}, длительность {duration}{mocked}. URL: {url}",
-    rule_meta: "{matchType} · {status}{delay}",
-    delay_suffix: " мс"
-  },
-  en: {
-    app_name: "Request Override",
-    language_label: "Language",
-    tab_requests: "Requests",
-    tab_rules: "Rules",
-    mode_network: "Network-level mock",
-    mode_mask: "Mask query params",
-    status_checking: "Checking…",
-    status_attached: "Network interception active for tab {tabId}",
-    status_off: "Network interception off — in-page mode",
-    status_error_detail: "Error: {error}",
-    status_no_tab: "No active http(s) tab",
-    refresh: "Refresh",
-    diagnostics: "Diagnostics",
-    clear_logs: "Clear logs",
-    empty_requests: "No requests yet. Make fetch/XHR requests on the page.",
-    empty_rules: "No rules. Right-click a request to create one.",
-    add_rule: "Add rule",
-    rule_enabled: "Enable rule",
-    rule_disabled: "Disable rule",
-    edit_rule: "Edit",
-    delete_rule: "Delete",
-    copy_url: "Copy URL",
-    copied: "Copied",
-    collapse_panel: "Collapse panel",
-    expand_panel: "Expand panel",
-    modal_title_new: "New rule",
-    modal_title_edit: "Edit rule",
-    url_pattern: "URL pattern",
-    url_pattern_ph: "https://api.example.com/users/42 or /users/42",
-    match_substring: "Substring",
-    match_regex: "Regex",
-    method: "Method",
-    any_method: "Any",
-    status_code: "Status code",
-    status_text: "Status text",
-    status_text_ph: "OK, Not Found, etc.",
-    content_type: "Content-Type",
-    content_type_ph: "application/json; charset=utf-8",
-    body: "Response body",
-    body_ph: '{"ok":true}',
-    delay: "Delay (ms)",
-    enabled: "Enabled",
-    cancel: "Cancel",
-    save_rule: "Save rule",
-    close: "Close",
-    error_url_required: "Enter a URL pattern",
-    error_status_required: "Status code must be a number from 100 to 599",
-    error_regex: "Invalid regular expression",
-    error_body: "Body must be at most 1 MB",
-    error_delay: "Delay must be between 0 and 60000 ms",
-    error_rules_limit: "Maximum 100 rules",
-    error_storage: "Failed to save data",
-    mocked: "MOCKED",
-    any_method_label: "ANY",
-    request_aria: "Request {method} {name}. Status {status}, duration {duration}{mocked}. URL: {url}",
-    rule_meta: "{matchType} · {status}{delay}",
-    delay_suffix: " ms"
-  }
-};
-
-const state = {
-  rules: [],
-  logs: [],
-  currentTabId: null,
-  editingId: null,
-  netMode: true,
-  maskUrls: false,
-  language: "ru",
-  collapsed: false,
-  netStatus: { ready: false, attached: false, error: null, tabId: null, updatedAt: null },
-  lastFocused: null
-};
-
-const $ = (id) => document.getElementById(id);
-const appShell = $("app-shell");
-const panelToggle = $("panel-toggle");
-const toggleArrow = $("toggle-arrow");
-const stripStatus = $("strip-status");
-const stripCount = $("strip-count");
-const langSelect = $("lang-select");
-const tabRequests = $("tab-requests");
-const tabRules = $("tab-rules");
-const panelRequests = $("panel-requests");
-const panelRules = $("panel-rules");
-const netModeCheckbox = $("net-mode");
-const maskUrlsCheckbox = $("mask-urls");
-const netStatusEl = $("net-status");
-const btnRefresh = $("btn-refresh");
-const btnDiag = $("btn-diag");
-const btnClear = $("btn-clear");
-const reqList = $("req-list");
-const reqEmpty = $("req-empty");
-const btnAddRule = $("btn-add-rule");
-const rulesList = $("rules-list");
-const rulesEmpty = $("rules-empty");
-const modal = $("modal");
-const modalTitle = $("modal-title");
-const modalClose = $("modal-close");
-const urlInput = $("rule-url");
-const methodSelect = $("rule-method");
-const statusInput = $("rule-status");
-const statusTextInput = $("rule-status-text");
-const contentTypeInput = $("rule-content-type");
-const bodyInput = $("rule-body");
-const delayInput = $("rule-delay");
-const enabledInput = $("rule-enabled");
-const btnCancel = $("btn-cancel");
-const btnSaveRule = $("btn-save-rule");
-const fieldError = $("field-error");
-
-function safeString(value, fallback = "") {
-  return typeof value === "string" ? value : fallback;
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function truncate(value, max = 200) {
-  const text = safeString(value, "");
-  return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
-function byteLength(value) {
-  try {
-    return new TextEncoder().encode(safeString(value, "")).length;
-  } catch {
-    return safeString(value, "").length;
-  }
-}
-
-function t(key, params = {}) {
-  let str = (I18N[state.language] && I18N[state.language][key]) || I18N.en[key] || key;
-  for (const [k, v] of Object.entries(params)) {
-    str = str.split(`{${k}}`).join(String(v));
-  }
-  return str;
-}
-
-function applyI18n() {
-  document.documentElement.lang = state.language;
-  document.title = t("app_name");
-
-  document.querySelectorAll("[data-i18n]").forEach((el) => {
-    el.textContent = t(el.dataset.i18n);
-  });
-  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
-    el.setAttribute("placeholder", t(el.dataset.i18nPlaceholder));
-  });
-  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
-    el.setAttribute("title", t(el.dataset.i18nTitle));
-  });
-  document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
-    el.setAttribute("aria-label", t(el.dataset.i18nAria));
-  });
-
-  const currentMethod = methodSelect.value;
-  syncMethodSelect();
-  methodSelect.value = currentMethod;
-
-  updateCollapseControls();
-  renderNetStatus();
-  renderRules();
-  renderRequests();
-}
-
-function normalizeLocalRule(rule) {
-  if (!rule || typeof rule !== "object") return null;
-  return {
-    id: typeof rule.id === "string" && rule.id ? rule.id : crypto.randomUUID(),
-    urlPattern: safeString(rule.urlPattern).slice(0, MAX_PATTERN_LEN),
-    matchType: rule.matchType === "regex" ? "regex" : "substring",
-    method: HTTP_METHODS.has(String(rule.method || "").toUpperCase()) ? String(rule.method || "").toUpperCase() : "",
-    status: Number.isInteger(rule.status) && rule.status >= 100 && rule.status <= 599 ? rule.status : 200,
-    statusText: safeString(rule.statusText).slice(0, MAX_STATUS_TEXT_LEN),
-    contentType: safeString(rule.contentType).slice(0, MAX_CONTENT_TYPE_LEN),
-    body: safeString(rule.body).slice(0, MAX_BODY_BYTES),
-    delayMs: Number.isFinite(rule.delayMs) ? Math.max(0, Math.min(MAX_DELAY_MS, Math.round(rule.delayMs))) : 0,
-    enabled: rule.enabled !== false
-  };
-}
-
-function normalizeLocalRules(rules) {
-  if (!Array.isArray(rules)) return [];
-  return rules.map(normalizeLocalRule).filter(Boolean).slice(0, MAX_RULES);
-}
-
-function normalizeLocalLog(entry) {
-  if (!entry || typeof entry !== "object") return null;
-  return {
-    id: entry.id || crypto.randomUUID(),
-    method: safeString(entry.method).slice(0, 10) || "GET",
-    url: safeString(entry.url).slice(0, 2000),
-    status: Number.isFinite(entry.status) ? entry.status : null,
-    durationMs: Number.isFinite(entry.durationMs) ? entry.durationMs : null,
-    mocked: entry.mocked === true,
-    ts: Number.isFinite(entry.ts) ? entry.ts : Date.now()
-  };
-}
-
-function normalizeLocalLogs(logs) {
-  if (!Array.isArray(logs)) return [];
-  return logs.map(normalizeLocalLog).filter(Boolean);
-}
-
-function activeRuleCount() {
-  return state.rules.filter((r) => r && r.enabled !== false).length;
-}
-
-function getRequestName(entry) {
-  const url = safeString(entry && entry.url, "");
-  try {
-    const u = new URL(url, window.location.href);
-    const segments = u.pathname.split("/").filter(Boolean);
-    if (segments.length) {
-      const name = segments[segments.length - 1];
-      return name.length > 48 ? `${name.slice(0, 48)}…` : name;
+  const Shared = globalThis.RequestOverrideShared;
+  const { LIMITS, HTTP_METHODS } = Shared;
+  const I18N = {
+    ru: {
+      overrides: "Подмены", requests: "Запросы", rules: "Правила", retry: "Повторить",
+      status_active: "Сетевой перехват активен", status_active_detail: "Mock-статусы видны в DevTools Network",
+      status_idle: "Ожидание правила", status_idle_detail: "Debugger подключится только к применимым вкладкам",
+      status_starting: "Подключение…", status_starting_detail: "Подготавливаем сетевой перехват",
+      status_fallback: "Режим внутри страницы", status_fallback_detail: "Mock работает, но не отображается в DevTools Network",
+      status_conflict: "Конфликт debugger", status_conflict_detail: "DevTools или другое расширение заняло подключение",
+      status_paused: "Подмены выключены", status_paused_detail: "Все запросы проходят без изменений",
+      status_unavailable: "Нет HTTP-вкладки", status_unavailable_detail: "Откройте обычную web-страницу",
+      search: "Фильтр URL…", pause: "Приостановить запись", clear: "Очистить запросы",
+      mocked_only: "Только MOCKED", recording_paused: "Запись приостановлена", resume: "Продолжить",
+      empty_requests_title: "Ждём запросы", empty_requests_body: "Взаимодействуйте со страницей — fetch и XHR появятся здесь в реальном времени.",
+      add_rule: "Добавить правило", import_rules: "Импорт правил", export_rules: "Экспорт правил",
+      empty_rules_title: "Правил пока нет", empty_rules_body: "Создайте быстрый override из запроса или настройте правило вручную.", create_first: "Создать первое правило",
+      network_mode: "Статусы в DevTools", network_mode_detail: "Настоящий HTTP-статус в Network",
+      mask_query: "Скрывать параметры URL", mask_query_help: "Заменяет значения после ? в журнале на *** — например token=***", diagnostics: "Диагностика",
+      quick_override: "Быстрая подмена", custom_rule: "Настроить вручную…", override_rule: "Правило подмены", new_rule: "Новое правило", edit_rule: "Изменить правило",
+      rule_name: "Название", url_match: "Совпадение URL", method: "Метод", status: "Статус", scope: "Область",
+      status_text: "Текст статуса", response_body: "Тело ответа", format_json: "Форматировать JSON", delay: "Задержка (мс)", priority: "Приоритет", enabled: "Включено",
+      cancel: "Отмена", save_rule: "Сохранить правило", replace: "Заменить", merge: "Объединить",
+      any_method: "Любой", current_site: "Текущий сайт", this_tab: "Эта вкладка", all_sites: "Все сайты",
+      matches: "Совпадений: {count}", conflict: "Возможный конфликт с правилом «{name}». Победит больший приоритет.",
+      required_url: "Укажите URL-паттерн", invalid_status: "Статус должен быть целым числом от 200 до 599", invalid_regex: "Некорректное регулярное выражение",
+      invalid_delay: "Задержка должна быть от 0 до 60000 мс", body_too_large: "Тело ответа больше 1 МБ", rule_limit: "Достигнут лимит 100 правил", storage_error: "Не удалось сохранить изменения",
+      created: "Правило создано. Повторите запрос.", saved: "Правило сохранено", deleted: "Правило удалено", undo: "Вернуть", duplicated: "Правило продублировано",
+      copied: "URL скопирован", diag_copied: "Диагностика скопирована", export_empty: "Нет правил для экспорта", imported: "Правила импортированы",
+      import_summary: "Найдено правил: {count}. Совпадающих ID: {conflicts}.", import_conflicts: "При объединении правила с одинаковыми ID будут заменены.", invalid_import: "Файл не содержит корректных правил",
+      hits: "срабатываний: {count}", never: "ещё не срабатывало", last_hit: "последнее: {time}",
+      site_scope: "сайт", tab_scope: "вкладка", all_scope: "везде", delay_short: "+{delay} мс", selected_export: "Экспортировано правил: {count}",
+      show_repeats: "показать {count}", hide_repeats: "скрыть повторы", mode_network: "Network", mode_page: "In-page", mode_native: "Native"
+    },
+    en: {
+      overrides: "Overrides", requests: "Requests", rules: "Rules", retry: "Retry",
+      status_active: "Network interception active", status_active_detail: "Mock statuses are visible in DevTools Network",
+      status_idle: "Waiting for a rule", status_idle_detail: "Debugger attaches only to applicable tabs",
+      status_starting: "Connecting…", status_starting_detail: "Preparing network interception",
+      status_fallback: "In-page fallback", status_fallback_detail: "Mock works, but is not visible in DevTools Network",
+      status_conflict: "Debugger conflict", status_conflict_detail: "DevTools or another extension owns the connection",
+      status_paused: "Overrides disabled", status_paused_detail: "All requests pass through unchanged",
+      status_unavailable: "No HTTP tab", status_unavailable_detail: "Open a regular web page",
+      search: "Filter URL…", pause: "Pause recording", clear: "Clear requests",
+      mocked_only: "MOCKED only", recording_paused: "Recording paused", resume: "Resume",
+      empty_requests_title: "Waiting for requests", empty_requests_body: "Interact with the page. Fetch and XHR requests will appear here live.",
+      add_rule: "Add rule", import_rules: "Import rules", export_rules: "Export rules",
+      empty_rules_title: "No override rules", empty_rules_body: "Use Quick override on a request or create a custom rule.", create_first: "Create first rule",
+      network_mode: "DevTools statuses", network_mode_detail: "Real HTTP status in the Network panel",
+      mask_query: "Hide URL parameters", mask_query_help: "Replaces values after ? in the journal with *** — for example token=***", diagnostics: "Diagnostics",
+      quick_override: "Quick override", custom_rule: "Custom rule…", override_rule: "Override rule", new_rule: "New rule", edit_rule: "Edit rule",
+      rule_name: "Name", url_match: "URL match", method: "Method", status: "Status", scope: "Scope",
+      status_text: "Status text", response_body: "Response body", format_json: "Format JSON", delay: "Delay (ms)", priority: "Priority", enabled: "Enabled",
+      cancel: "Cancel", save_rule: "Save rule", replace: "Replace", merge: "Merge",
+      any_method: "Any", current_site: "Current site", this_tab: "This tab", all_sites: "All sites",
+      matches: "Matches: {count}", conflict: "Possible conflict with “{name}”. Higher priority wins.",
+      required_url: "Enter a URL pattern", invalid_status: "Status must be an integer from 200 to 599", invalid_regex: "Invalid regular expression",
+      invalid_delay: "Delay must be between 0 and 60000 ms", body_too_large: "Response body is larger than 1 MB", rule_limit: "Maximum 100 rules reached", storage_error: "Failed to save changes",
+      created: "Rule created. Repeat the request.", saved: "Rule saved", deleted: "Rule deleted", undo: "Undo", duplicated: "Rule duplicated",
+      copied: "URL copied", diag_copied: "Diagnostics copied", export_empty: "No rules to export", imported: "Rules imported",
+      import_summary: "Found {count} rules. Matching IDs: {conflicts}.", import_conflicts: "On merge, rules with matching IDs will be replaced.", invalid_import: "The file has no valid rules",
+      hits: "hits: {count}", never: "never matched", last_hit: "last: {time}",
+      site_scope: "site", tab_scope: "tab", all_scope: "everywhere", delay_short: "+{delay} ms", selected_export: "Exported rules: {count}",
+      show_repeats: "show {count}", hide_repeats: "hide repeats", mode_network: "Network", mode_page: "In-page", mode_native: "Native"
     }
-    const firstQuery = u.searchParams.key(0);
-    if (firstQuery) return firstQuery;
-    return u.hostname || url;
-  } catch {
-    const path = url.split("?")[0].split("#")[0];
-    const segments = path.split("/").filter(Boolean);
-    const name = segments[segments.length - 1] || path || url || "?";
-    return name.length > 48 ? `${name.slice(0, 48)}…` : name;
+  };
+
+  const state = {
+    language: "ru", rules: [], logs: [], currentTabId: null, currentPageUrl: "", currentOrigin: "",
+    overridesEnabled: true, netMode: true, maskUrls: false, recordingPaused: false,
+    netStatus: { status: "starting", error: null, applicableRuleCount: 0 }, activePanel: "requests",
+    requestFilter: { search: "", method: "", status: "", mockedOnly: false }, expandedGroups: new Set(),
+    selectedRules: new Set(), ruleStats: {}, editingId: null, sourceEntry: null, patternMode: "path",
+    quickEntry: null, pendingImport: null, undoRule: null, renderScheduled: false, toastTimer: null
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    app: $("app"), main: $("main"), pageLabel: $("page-label"),
+    master: $("master-toggle"), statusCard: $("status-card"), statusTitle: $("status-title"), statusDetail: $("status-detail"), retry: $("retry-btn"),
+    tabRequests: $("tab-requests"), tabRules: $("tab-rules"), requestCount: $("request-count"), ruleCount: $("rule-count"),
+    requestsPanel: $("requests-panel"), rulesPanel: $("rules-panel"), search: $("request-search"), methodFilter: $("method-filter"), statusFilter: $("status-filter"), mockedFilter: $("mocked-filter"),
+    pause: $("pause-btn"), resume: $("resume-btn"), clear: $("clear-btn"), recordingBanner: $("recording-banner"), requestList: $("request-list"), requestsEmpty: $("requests-empty"),
+    addRule: $("add-rule-btn"), emptyAdd: $("empty-add-btn"), importButton: $("import-btn"), exportButton: $("export-btn"), importFile: $("import-file"), rulesList: $("rules-list"), rulesEmpty: $("rules-empty"),
+    network: $("network-toggle"), mask: $("mask-toggle"), language: $("language-select"), diagnostics: $("diagnostics-btn"),
+    quickMenu: $("quick-menu"), quickClose: $("quick-close"), quickTarget: $("quick-target"), customRule: $("custom-rule-btn"),
+    ruleDialog: $("rule-dialog"), ruleDialogTitle: $("rule-dialog-title"), ruleClose: $("rule-close"), ruleName: $("rule-name"), ruleUrl: $("rule-url"), matchCount: $("match-count"), conflict: $("conflict-warning"),
+    ruleMethod: $("rule-method"), ruleStatus: $("rule-status"), ruleScope: $("rule-scope"), ruleStatusText: $("rule-status-text"), ruleContentType: $("rule-content-type"), ruleBody: $("rule-body"),
+    ruleDelay: $("rule-delay"), rulePriority: $("rule-priority"), ruleEnabled: $("rule-enabled"), formatJson: $("format-json-btn"), formError: $("form-error"), saveRule: $("save-rule-btn"), patternMode: $("pattern-mode"),
+    importDialog: $("import-dialog"), importSummary: $("import-summary"), importConflicts: $("import-conflicts"), importCancel: $("import-cancel"), importReplace: $("import-replace"), importMerge: $("import-merge"),
+    toast: $("toast"), toastText: $("toast-text"), toastAction: $("toast-action")
+  };
+
+  function t(key, parameters) {
+    let value = (I18N[state.language] && I18N[state.language][key]) || I18N.en[key] || key;
+    for (const [name, replacement] of Object.entries(parameters || {})) value = value.replaceAll(`{${name}}`, String(replacement));
+    return value;
   }
-}
 
-function formatDuration(entry) {
-  if (Number.isFinite(entry && entry.durationMs)) return `${Math.round(entry.durationMs)} ms`;
-  return "—";
-}
+  function escapeHtml(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+  }
 
-function methodClass(method) {
-  return `m-${String(method || "get").toLowerCase()}`;
-}
+  function applyI18n() {
+    document.documentElement.lang = state.language;
+    document.querySelectorAll("[data-i18n]").forEach((element) => { element.textContent = t(element.dataset.i18n); });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => { element.placeholder = t(element.dataset.i18nPlaceholder); });
+    document.querySelectorAll("[data-i18n-title]").forEach((element) => {
+      const label = t(element.dataset.i18nTitle);
+      element.title = label;
+      element.setAttribute("aria-label", label);
+    });
+    syncRuleSelects();
+    renderAll();
+  }
 
-function statusClass(status) {
-  const s = Number(status);
-  if (!Number.isFinite(s) || s < 100) return "s-unknown";
-  if (s >= 200 && s < 300) return "s-2xx";
-  if (s >= 300 && s < 400) return "s-3xx";
-  if (s >= 400 && s < 500) return "s-4xx";
-  if (s >= 500) return "s-5xx";
-  return "s-unknown";
-}
+  function syncRuleSelects() {
+    const method = els.ruleMethod.value;
+    els.ruleMethod.textContent = "";
+    for (const item of HTTP_METHODS) {
+      const option = document.createElement("option");
+      option.value = item;
+      option.textContent = item || t("any_method");
+      els.ruleMethod.appendChild(option);
+    }
+    els.ruleMethod.value = method;
+    els.ruleScope.options[0].textContent = t("current_site");
+    els.ruleScope.options[1].textContent = t("this_tab");
+    els.ruleScope.options[2].textContent = t("all_sites");
+  }
 
-async function copyText(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
+  function getUrlParts(url) {
     try {
-      document.execCommand("copy");
-    } catch {}
-    ta.remove();
+      const parsed = new URL(url);
+      return { host: parsed.host, path: `${parsed.pathname}${parsed.search}`, cleanPath: parsed.pathname || "/" };
+    } catch (_error) {
+      return { host: "", path: String(url), cleanPath: String(url).split("?")[0] };
+    }
   }
-}
 
-function showStorageError() {
-  netStatusEl.textContent = t("error_storage");
-}
+  function statusClass(status) {
+    const family = Math.floor(Number(status) / 100);
+    return Number(status) === 0 ? "s0" : `s${family}`;
+  }
 
-function renderRequests() {
-  reqList.textContent = "";
-  reqEmpty.classList.toggle("hidden", state.logs.length > 0);
+  function modeLabel(mode) {
+    if (mode === "network") return t("mode_network");
+    if (mode === "in-page") return t("mode_page");
+    return t("mode_native");
+  }
 
-  for (const entry of state.logs) {
-    const method = entry.method || "GET";
-    const name = getRequestName(entry);
-    const status = entry.status == null ? "—" : String(entry.status);
-    const duration = formatDuration(entry);
-    const mocked = entry.mocked === true;
-    const aria = t("request_aria", {
-      method,
-      name,
-      status,
-      duration,
-      mocked: mocked ? `, ${t("mocked")}` : "",
-      url: truncate(entry.url, 200)
+  function renderStatus() {
+    const status = state.netStatus.status || "unavailable";
+    els.statusCard.className = `status-card ${status}`;
+    els.statusTitle.textContent = t(`status_${status}`);
+    els.statusDetail.textContent = state.netStatus.error || t(`status_${status}_detail`);
+    els.retry.classList.toggle("hidden", !["conflict", "fallback"].includes(status));
+    els.master.checked = state.overridesEnabled;
+  }
+
+  function filteredLogs() {
+    const search = state.requestFilter.search.toLowerCase();
+    return state.logs.filter((entry) => {
+      if (search && !entry.url.toLowerCase().includes(search)) return false;
+      if (state.requestFilter.method && entry.method !== state.requestFilter.method) return false;
+      if (state.requestFilter.status === "0" && entry.status !== 0) return false;
+      if (state.requestFilter.status && state.requestFilter.status !== "0" && Math.floor(entry.status / 100) !== Number(state.requestFilter.status)) return false;
+      if (state.requestFilter.mockedOnly && !entry.mocked) return false;
+      return true;
     });
+  }
 
-    const row = document.createElement("div");
-    row.className = "req-row";
-    row.setAttribute("role", "button");
-    row.tabIndex = 0;
-    row.setAttribute("aria-label", aria);
-    row.innerHTML = `
-      <div class="req-main">
-        <span class="req-method ${methodClass(method)}">${escapeHtml(method)}</span>
-        <span class="req-name">${escapeHtml(name)}</span>
-        <span class="req-status ${statusClass(entry.status)}">${escapeHtml(status)}</span>
-        <span class="req-dur">${escapeHtml(duration)}</span>
-        ${mocked ? `<span class="req-mock">${escapeHtml(t("mocked"))}</span>` : ""}
-      </div>
-      <div class="req-sub">
-        <span class="req-url" title="${escapeHtml(entry.url)}">${escapeHtml(entry.url)}</span>
-        <button class="copy-url" type="button" title="${escapeHtml(t("copy_url"))}" aria-label="${escapeHtml(t("copy_url"))}">⧉</button>
-      </div>
-    `;
+  function groupLogs(logs) {
+    const groups = new Map();
+    for (const entry of logs.slice().reverse()) {
+      const key = `${entry.method} ${Shared.smartPattern(entry.url)}`;
+      if (!groups.has(key)) groups.set(key, { key, latest: entry, entries: [] });
+      groups.get(key).entries.push(entry);
+    }
+    return Array.from(groups.values());
+  }
 
-    row.addEventListener("click", () => openModal(entry));
-    row.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      openModal(entry);
+  function scheduleRequestsRender() {
+    if (state.renderScheduled) return;
+    state.renderScheduled = true;
+    requestAnimationFrame(() => {
+      state.renderScheduled = false;
+      renderRequests();
     });
-    row.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        openModal(entry);
+  }
+
+  function renderRequests() {
+    const logs = filteredLogs();
+    const groups = groupLogs(logs);
+    els.requestCount.textContent = String(state.logs.length);
+    els.requestsEmpty.classList.toggle("hidden", groups.length > 0);
+    els.requestList.classList.toggle("hidden", groups.length === 0);
+    els.requestList.textContent = "";
+
+    for (const group of groups) {
+      const entry = group.latest;
+      const parts = getUrlParts(entry.url);
+      const matchedRule = entry.ruleId ? state.rules.find((rule) => rule.id === entry.ruleId) : null;
+      const expanded = state.expandedGroups.has(group.key);
+      const card = document.createElement("article");
+      card.className = "request-group";
+      card.innerHTML = `
+        <div class="request-row" tabindex="0" role="button" aria-label="${escapeHtml(`${entry.method} ${parts.path} ${entry.status}`)}">
+          <span class="method ${escapeHtml(entry.method.toLowerCase())}">${escapeHtml(entry.method)}</span>
+          <span class="request-copy"><span class="request-path">${escapeHtml(parts.path)}</span><span class="request-host">${escapeHtml(parts.host)}</span></span>
+          <span class="status ${statusClass(entry.status)}">${entry.status || "ERR"}</span>
+          <button class="quick-button" type="button" aria-label="${escapeHtml(t("quick_override"))}">＋</button>
+        </div>
+        <div class="request-meta">
+          <span>${entry.durationMs} ms</span>
+          ${entry.mocked ? `<span class="badge mocked">MOCKED</span>` : ""}
+          <span class="badge ${entry.mode === "network" ? "network" : ""}">${escapeHtml(modeLabel(entry.mode))}</span>
+          ${matchedRule ? `<span class="badge" title="${escapeHtml(ruleDisplayName(matchedRule))}">${escapeHtml(ruleDisplayName(matchedRule))}</span>` : ""}
+          <button class="group-toggle" type="button">${group.entries.length > 1 ? escapeHtml(expanded ? t("hide_repeats") : t("show_repeats", { count: group.entries.length })) : ""}</button>
+          <button class="group-toggle copy-url" type="button" title="Copy URL">⧉</button>
+          ${group.entries.length > 1 ? `<span class="count-badge">×${group.entries.length}</span>` : ""}
+        </div>
+        <div class="request-children ${expanded ? "" : "hidden"}"></div>`;
+      const row = card.querySelector(".request-row");
+      const quick = card.querySelector(".quick-button");
+      const groupToggle = card.querySelector(".group-toggle");
+      const copy = card.querySelector(".copy-url");
+      const children = card.querySelector(".request-children");
+      row.addEventListener("click", (event) => { if (!event.target.closest("button")) openRuleDialog({ entry }); });
+      row.addEventListener("keydown", (event) => { if (event.key === "Enter") openRuleDialog({ entry }); });
+      row.addEventListener("contextmenu", (event) => { event.preventDefault(); openQuickMenu(entry, { x: event.clientX, y: event.clientY }); });
+      quick.addEventListener("click", (event) => { event.stopPropagation(); const rect = quick.getBoundingClientRect(); openQuickMenu(entry, { x: rect.right, y: rect.bottom }); });
+      copy.addEventListener("click", async () => { await copyText(entry.url); showToast(t("copied")); });
+      if (group.entries.length > 1) {
+        groupToggle.addEventListener("click", () => {
+          if (expanded) state.expandedGroups.delete(group.key); else state.expandedGroups.add(group.key);
+          renderRequests();
+        });
+        for (const child of group.entries.slice(1)) {
+          const line = document.createElement("div");
+          line.className = "request-child";
+          line.innerHTML = `<span class="status ${statusClass(child.status)}">${child.status || "ERR"}</span><span>${child.durationMs} ms</span><span>${escapeHtml(modeLabel(child.mode))}</span><time>${new Date(child.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>`;
+          children.appendChild(line);
+        }
       }
-    });
-
-    const copyBtn = row.querySelector(".copy-url");
-    copyBtn.addEventListener("click", async (event) => {
-      event.stopPropagation();
-      await copyText(entry.url);
-      copyBtn.textContent = "✓";
-      setTimeout(() => {
-        copyBtn.textContent = "⧉";
-      }, 1200);
-    });
-
-    reqList.appendChild(row);
-  }
-}
-
-function renderRules() {
-  rulesList.textContent = "";
-  rulesEmpty.classList.toggle("hidden", state.rules.length > 0);
-  stripCount.textContent = String(activeRuleCount());
-
-  for (const rule of state.rules) {
-    const enabled = rule.enabled !== false;
-    const row = document.createElement("div");
-    row.className = "rule-row";
-
-    const toggle = document.createElement("label");
-    toggle.className = "check";
-    toggle.innerHTML = `
-      <input type="checkbox" ${enabled ? "checked" : ""} aria-label="${escapeHtml(enabled ? t("rule_enabled") : t("rule_disabled"))}" />
-      <span class="box" aria-hidden="true"></span>
-    `;
-    toggle.querySelector("input").addEventListener("change", (event) => {
-      setRuleEnabled(rule.id, event.target.checked);
-    });
-
-    const info = document.createElement("div");
-    info.className = "rule-info";
-
-    const matchKey = rule.matchType === "regex" ? "match_regex" : "match_substring";
-    const delayText = rule.delayMs ? ` · ${rule.delayMs}${t("delay_suffix")}` : "";
-    info.innerHTML = `
-      <div class="rule-summary">
-        <span class="rule-method">${escapeHtml(rule.method || t("any_method_label"))}</span>
-        <span class="rule-status ${statusClass(rule.status)}">${escapeHtml(String(rule.status))}</span>
-        <code class="rule-pattern" title="${escapeHtml(rule.urlPattern)}">${escapeHtml(rule.urlPattern)}</code>
-      </div>
-      <div class="rule-meta">${escapeHtml(t("rule_meta", {
-        matchType: t(matchKey),
-        status: rule.status,
-        delay: delayText
-      }))}</div>
-    `;
-
-    const actions = document.createElement("div");
-    actions.className = "rule-actions";
-    actions.innerHTML = `
-      <button class="btn" type="button" data-i18n="${"edit_rule"}">${escapeHtml(t("edit_rule"))}</button>
-      <button class="btn" type="button" data-i18n="${"delete_rule"}">${escapeHtml(t("delete_rule"))}</button>
-    `;
-    actions.querySelector('button[data-i18n="edit_rule"]').addEventListener("click", () => editRule(rule));
-    actions.querySelector('button[data-i18n="delete_rule"]').addEventListener("click", () => deleteRule(rule.id));
-
-    row.append(toggle, info, actions);
-    rulesList.appendChild(row);
-  }
-}
-
-async function loadRules() {
-  try {
-    const res = await chrome.storage.local.get("rm_rules");
-    state.rules = normalizeLocalRules(res.rm_rules || []);
-  } catch (err) {
-    state.rules = [];
-    showStorageError();
-    console.error(err);
-  }
-  renderRules();
-}
-
-async function loadSettings() {
-  try {
-    const res = await chrome.storage.local.get(["rm_rules", "rm_net_mode", "rm_mask_urls", "rm_language", "rm_panel_collapsed"]);
-    state.rules = normalizeLocalRules(res.rm_rules || []);
-    state.netMode = res.rm_net_mode !== false;
-    state.maskUrls = res.rm_mask_urls === true;
-    state.language = res.rm_language === "en" ? "en" : "ru";
-    state.collapsed = res.rm_panel_collapsed === true;
-  } catch (err) {
-    console.error(err);
-    showStorageError();
-  }
-
-  netModeCheckbox.checked = state.netMode;
-  maskUrlsCheckbox.checked = state.maskUrls;
-  langSelect.value = state.language;
-  applyI18n();
-}
-
-async function setRuleEnabled(id, enabled) {
-  const next = state.rules.map((r) => (r.id === id ? { ...r, enabled } : r));
-  try {
-    await chrome.storage.local.set({ rm_rules: next });
-    state.rules = next;
-    renderRules();
-  } catch (err) {
-    showStorageError();
-    console.error(err);
-  }
-}
-
-async function deleteRule(id) {
-  const next = state.rules.filter((r) => r.id !== id);
-  try {
-    await chrome.storage.local.set({ rm_rules: next });
-    state.rules = next;
-    renderRules();
-  } catch (err) {
-    showStorageError();
-    console.error(err);
-  }
-}
-
-async function loadNetMode() {
-  try {
-    const res = await chrome.storage.local.get("rm_net_mode");
-    state.netMode = res.rm_net_mode !== false;
-  } catch {
-    state.netMode = true;
-  }
-  netModeCheckbox.checked = state.netMode;
-}
-
-async function loadMaskUrls() {
-  try {
-    const res = await chrome.storage.local.get("rm_mask_urls");
-    state.maskUrls = res.rm_mask_urls === true;
-  } catch {
-    state.maskUrls = false;
-  }
-  maskUrlsCheckbox.checked = state.maskUrls;
-}
-
-async function loadLanguage() {
-  try {
-    const res = await chrome.storage.local.get("rm_language");
-    state.language = res.rm_language === "en" ? "en" : "ru";
-  } catch {
-    state.language = "ru";
-  }
-  langSelect.value = state.language;
-}
-
-async function loadCollapsed() {
-  try {
-    const res = await chrome.storage.local.get("rm_panel_collapsed");
-    state.collapsed = res.rm_panel_collapsed === true;
-  } catch {
-    state.collapsed = false;
-  }
-  updateCollapseControls();
-}
-
-function updateCollapseControls() {
-  appShell.classList.toggle("collapsed", state.collapsed);
-  panelToggle.setAttribute("aria-expanded", String(!state.collapsed));
-  toggleArrow.textContent = state.collapsed ? "→" : "←";
-  const label = t(state.collapsed ? "expand_panel" : "collapse_panel");
-  panelToggle.setAttribute("aria-label", label);
-  panelToggle.setAttribute("title", label);
-}
-
-async function setCollapsed(value) {
-  state.collapsed = value;
-  updateCollapseControls();
-  try {
-    await chrome.storage.local.set({ rm_panel_collapsed: value });
-  } catch (err) {
-    console.error(err);
-  }
-}
-
-async function setLanguage(value) {
-  state.language = value === "en" ? "en" : "ru";
-  langSelect.value = state.language;
-  try {
-    await chrome.storage.local.set({ rm_language: state.language });
-  } catch (err) {
-    console.error(err);
-  }
-  applyI18n();
-}
-
-function renderNetStatus() {
-  const ready = Boolean(state.netStatus.attached);
-  stripStatus.className = `strip-status ${ready ? "ok" : state.netStatus.error ? "err" : ""}`;
-  stripCount.textContent = String(activeRuleCount());
-
-  let text;
-  if (!state.netMode) text = t("status_off");
-  else if (!state.currentTabId) text = t("status_no_tab");
-  else if (state.netStatus.error) text = t("status_error_detail", { error: truncate(state.netStatus.error, 120) });
-  else if (ready) text = t("status_attached", { tabId: state.netStatus.tabId == null ? state.currentTabId : state.netStatus.tabId });
-  else text = t("status_checking");
-
-  netStatusEl.textContent = text;
-}
-
-async function queryNetStatus() {
-  try {
-    const res = await chrome.runtime.sendMessage({ type: "rm-net-status" });
-    if (res && res.tabId != null) {
-      state.netStatus = {
-        ready: Boolean(res.ready),
-        attached: Boolean(res.attached),
-        error: res.error || null,
-        tabId: res.tabId || null,
-        updatedAt: Date.now()
-      };
+      els.requestList.appendChild(card);
     }
-  } catch (err) {
-    state.netStatus.error = safeString(err && err.message, "unavailable");
   }
-  renderNetStatus();
-}
 
-async function fetchInitialLogs() {
-  try {
-    const res = await chrome.runtime.sendMessage({ type: "rm-get-logs" });
-    if (res && Array.isArray(res.logs)) {
-      state.logs = normalizeLocalLogs(res.logs);
+  function sortedRules() {
+    return state.rules.slice().sort((a, b) => b.priority - a.priority || a.createdAt - b.createdAt);
+  }
+
+  function ruleDisplayName(rule) {
+    return rule.name || `${rule.method || "ANY"} ${getUrlParts(rule.urlPattern).cleanPath || rule.urlPattern}`;
+  }
+
+  function ruleConflict(rule) {
+    return state.rules.find((candidate) => candidate.id !== rule.id && Shared.rulesMayConflict(rule, candidate)) || null;
+  }
+
+  function scopeLabel(rule) {
+    if (rule.scopeType === "site") {
+      let host = rule.scopeValue;
+      try { host = new URL(rule.scopeValue).host; } catch (_error) { /* keep raw scope */ }
+      return `${t("site_scope")}: ${host}`;
     }
-  } catch (err) {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab) return;
-      const res = await chrome.tabs.sendMessage(tab.id, { type: "rm-get-logs" });
-      if (res && Array.isArray(res.entries)) {
-        state.logs = normalizeLocalLogs(res.entries);
+    if (rule.scopeType === "tab") return `${t("tab_scope")}: ${rule.scopeValue}`;
+    return t("all_scope");
+  }
+
+  function renderRules() {
+    const rules = sortedRules();
+    els.ruleCount.textContent = String(state.rules.filter((rule) => rule.enabled).length);
+    els.rulesEmpty.classList.toggle("hidden", rules.length > 0);
+    els.rulesList.classList.toggle("hidden", rules.length === 0);
+    els.rulesList.textContent = "";
+    for (const rule of rules) {
+      const stats = state.ruleStats[rule.id] || { count: 0, lastMatchedAt: null };
+      const conflict = ruleConflict(rule);
+      const card = document.createElement("article");
+      card.className = `rule-card ${rule.enabled ? "" : "disabled"} ${conflict ? "conflicting" : ""}`;
+      card.innerHTML = `
+        <input class="rule-select" type="checkbox" aria-label="Select" ${state.selectedRules.has(rule.id) ? "checked" : ""} />
+        <div class="rule-main">
+          <div class="rule-head"><h3 class="rule-name">${escapeHtml(ruleDisplayName(rule))}</h3><span class="rule-status status ${statusClass(rule.status)}">${rule.status}</span><button class="rule-toggle ${rule.enabled ? "on" : ""}" type="button" aria-label="Toggle"></button></div>
+          <code class="rule-pattern" title="${escapeHtml(rule.urlPattern)}">${escapeHtml(rule.urlPattern)}</code>
+          <div class="rule-details"><span class="detail-pill">${escapeHtml(rule.method || "ANY")}</span><span class="detail-pill">${escapeHtml(scopeLabel(rule))}</span><span class="detail-pill">P${rule.priority}</span>${rule.delayMs ? `<span class="detail-pill">${escapeHtml(t("delay_short", { delay: rule.delayMs }))}</span>` : ""}<span class="detail-pill">${escapeHtml(stats.count ? t("hits", { count: stats.count }) : t("never"))}</span>${stats.lastMatchedAt ? `<span class="detail-pill">${escapeHtml(t("last_hit", { time: new Date(stats.lastMatchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }))}</span>` : ""}</div>
+          <div class="rule-actions"><button data-action="up" title="Priority up">↑</button><button data-action="down" title="Priority down">↓</button><button data-action="edit" title="Edit">✎</button><button data-action="duplicate" title="Duplicate">⧉</button><button data-action="delete" class="danger" title="Delete">×</button></div>
+        </div>`;
+      card.querySelector(".rule-select").addEventListener("change", (event) => { if (event.target.checked) state.selectedRules.add(rule.id); else state.selectedRules.delete(rule.id); });
+      card.querySelector(".rule-toggle").addEventListener("click", () => updateRule(rule.id, { enabled: !rule.enabled }));
+      card.querySelector("[data-action='up']").addEventListener("click", () => moveRule(rule.id, -1));
+      card.querySelector("[data-action='down']").addEventListener("click", () => moveRule(rule.id, 1));
+      card.querySelector("[data-action='edit']").addEventListener("click", () => openRuleDialog({ rule }));
+      card.querySelector("[data-action='duplicate']").addEventListener("click", () => duplicateRule(rule));
+      card.querySelector("[data-action='delete']").addEventListener("click", () => deleteRule(rule));
+      els.rulesList.appendChild(card);
+    }
+  }
+
+  function renderAll() {
+    renderStatus();
+    renderRequests();
+    renderRules();
+    els.recordingBanner.classList.toggle("hidden", !state.recordingPaused);
+    els.pause.classList.toggle("active", state.recordingPaused);
+    els.mockedFilter.setAttribute("aria-pressed", String(state.requestFilter.mockedOnly));
+  }
+
+  function switchPanel(panel) {
+    state.activePanel = panel;
+    const requests = panel === "requests";
+    els.requestsPanel.classList.toggle("hidden", !requests);
+    els.rulesPanel.classList.toggle("hidden", requests);
+    els.tabRequests.classList.toggle("active", requests);
+    els.tabRules.classList.toggle("active", !requests);
+    els.tabRequests.setAttribute("aria-selected", String(requests));
+    els.tabRules.setAttribute("aria-selected", String(!requests));
+  }
+
+  function openQuickMenu(entry, point) {
+    state.quickEntry = entry;
+    const parts = getUrlParts(entry.url);
+    els.quickTarget.textContent = `${entry.method} ${parts.cleanPath}`;
+    els.quickMenu.classList.remove("hidden");
+    const rect = els.quickMenu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(point.x - rect.width, innerWidth - rect.width - 8));
+    const top = Math.max(8, Math.min(point.y + 4, innerHeight - rect.height - 8));
+    els.quickMenu.style.left = `${left}px`;
+    els.quickMenu.style.top = `${top}px`;
+  }
+
+  function closeQuickMenu() {
+    els.quickMenu.classList.add("hidden");
+    state.quickEntry = null;
+  }
+
+  function nextPriority() {
+    return state.rules.reduce((maximum, rule) => Math.max(maximum, rule.priority), 0) + 10;
+  }
+
+  function responseBodyForStatus(status) {
+    if (status === 200 || Shared.NULL_BODY_STATUSES.has(status)) return "";
+    return JSON.stringify({ error: Shared.defaultStatusText(status) || "Request failed", status }, null, 2);
+  }
+
+  async function applyPreset(preset) {
+    const entry = state.quickEntry;
+    if (!entry) return;
+    const slow = preset === "slow";
+    const status = slow ? 200 : Number(preset);
+    const path = getUrlParts(entry.url).cleanPath;
+    const rule = Shared.normalizeRule({
+      id: Shared.createId("rule"), name: `${entry.method} ${path} — ${slow ? "slow 2s" : status}`,
+      urlPattern: Shared.smartPattern(entry.url), matchType: "substring", method: entry.method,
+      status, statusText: Shared.defaultStatusText(status), contentType: status === 200 ? "" : "application/json; charset=utf-8",
+      body: responseBodyForStatus(status), delayMs: slow ? 2000 : 0, enabled: true,
+      scopeType: state.currentOrigin ? "site" : "all", scopeValue: state.currentOrigin, priority: nextPriority()
+    });
+    closeQuickMenu();
+    if (state.rules.length >= LIMITS.maxRules) return showToast(t("rule_limit"));
+    await saveRules([...state.rules, rule]);
+    showToast(t("created"));
+    switchPanel("rules");
+  }
+
+  function setPatternMode(mode) {
+    state.patternMode = mode;
+    els.patternMode.querySelectorAll("button").forEach((button) => button.classList.toggle("active", button.dataset.patternMode === mode));
+    if (state.sourceEntry) {
+      if (mode === "exact") els.ruleUrl.value = Shared.exactPattern(state.sourceEntry.url);
+      else if (mode === "regex") els.ruleUrl.value = Shared.regexPattern(state.sourceEntry.url);
+      else els.ruleUrl.value = Shared.smartPattern(state.sourceEntry.url);
+    }
+    updateRulePreview();
+  }
+
+  function draftRule() {
+    const scopeType = els.ruleScope.value;
+    const existing = state.rules.find((rule) => rule.id === state.editingId);
+    let scopeValue = "";
+    if (scopeType === "site") scopeValue = existing && existing.scopeType === "site" ? existing.scopeValue : state.currentOrigin;
+    if (scopeType === "tab") scopeValue = existing && existing.scopeType === "tab" ? existing.scopeValue : String(state.currentTabId || "");
+    return Shared.normalizeRule({
+      id: state.editingId || "draft", name: els.ruleName.value.trim(), urlPattern: els.ruleUrl.value.trim(),
+      matchType: state.patternMode === "regex" ? "regex" : state.patternMode === "exact" ? "exact" : "substring", method: els.ruleMethod.value,
+      status: Number(els.ruleStatus.value), statusText: els.ruleStatusText.value.trim(), contentType: els.ruleContentType.value.trim(),
+      body: els.ruleBody.value, delayMs: Number(els.ruleDelay.value), enabled: els.ruleEnabled.checked,
+      scopeType, scopeValue,
+      priority: Number(els.rulePriority.value)
+    });
+  }
+
+  function updateRulePreview() {
+    const draft = draftRule();
+    let count = 0;
+    if (draft && draft.urlPattern) {
+      for (const entry of state.logs) {
+        if (Shared.ruleMatchesRequest(draft, entry.url, entry.method, { tabId: state.currentTabId, pageUrl: state.currentPageUrl })) count += 1;
       }
-    } catch {}
+    }
+    els.matchCount.textContent = t("matches", { count });
+    const conflict = draft && state.rules.find((rule) => rule.id !== state.editingId && Shared.rulesMayConflict(draft, rule));
+    els.conflict.classList.toggle("hidden", !conflict);
+    els.conflict.textContent = conflict ? t("conflict", { name: ruleDisplayName(conflict) }) : "";
   }
-  renderRequests();
-}
 
-async function refreshTab() {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    state.currentTabId = tab ? tab.id : null;
-  } catch {
-    state.currentTabId = null;
+  function openRuleDialog({ entry = null, rule = null } = {}) {
+    closeQuickMenu();
+    state.sourceEntry = entry;
+    state.editingId = rule && rule.id;
+    els.ruleDialogTitle.textContent = t(rule ? "edit_rule" : "new_rule");
+    const path = entry ? getUrlParts(entry.url).cleanPath : "";
+    els.ruleName.value = rule ? rule.name : entry ? `${entry.method} ${path}` : "";
+    els.ruleMethod.value = rule ? rule.method : entry ? entry.method : "";
+    els.ruleStatus.value = rule ? rule.status : entry && entry.status >= 200 ? entry.status : 200;
+    els.ruleStatusText.value = rule ? rule.statusText : Shared.defaultStatusText(Number(els.ruleStatus.value));
+    els.ruleContentType.value = rule ? rule.contentType : "application/json; charset=utf-8";
+    els.ruleBody.value = rule ? rule.body : "";
+    els.ruleDelay.value = rule ? rule.delayMs : 0;
+    els.rulePriority.value = rule ? rule.priority : nextPriority();
+    els.ruleEnabled.checked = rule ? rule.enabled : true;
+    els.ruleScope.value = rule ? rule.scopeType : state.currentOrigin ? "site" : "all";
+    els.formError.textContent = "";
+    state.patternMode = rule && rule.matchType === "regex" ? "regex" : rule && rule.matchType === "exact" ? "exact" : "path";
+    els.ruleUrl.value = rule ? rule.urlPattern : entry ? Shared.smartPattern(entry.url) : "";
+    setPatternMode(state.patternMode);
+    els.ruleDialog.showModal();
+    els.ruleName.focus();
   }
-  await fetchInitialLogs();
-  renderNetStatus();
-  queryNetStatus();
-}
 
-async function clearLogs() {
-  try {
-    await chrome.runtime.sendMessage({ type: "rm-clear-logs" });
-  } catch {}
-  state.logs = [];
-  renderRequests();
-}
-
-function syncMethodSelect() {
-  const current = methodSelect.value;
-  methodSelect.textContent = "";
-  const options = ["", ...HTTP_METHODS];
-  for (const m of options) {
-    const opt = document.createElement("option");
-    opt.value = m;
-    opt.textContent = m || t("any_method");
-    methodSelect.appendChild(opt);
+  function validateDraft(rule) {
+    if (!els.ruleUrl.value.trim()) return t("required_url");
+    const status = Number(els.ruleStatus.value);
+    if (!Number.isInteger(status) || status < 200 || status > 599) return t("invalid_status");
+    if (state.patternMode === "regex") {
+      try { new RegExp(els.ruleUrl.value.trim()); } catch (_error) { return t("invalid_regex"); }
+    }
+    const delay = Number(els.ruleDelay.value);
+    if (!Number.isFinite(delay) || delay < 0 || delay > LIMITS.maxDelayMs) return t("invalid_delay");
+    if (Shared.byteLength(els.ruleBody.value) > LIMITS.maxBodyBytes) return t("body_too_large");
+    if (!state.editingId && state.rules.length >= LIMITS.maxRules) return t("rule_limit");
+    if (!rule) return t("storage_error");
+    return "";
   }
-  methodSelect.value = current;
-}
 
-function openModal(entry) {
-  state.editingId = null;
-  modalTitle.textContent = t("modal_title_new");
-  urlInput.value = entry ? safeString(entry.url, "") : "";
-  document.querySelector('input[name="match-type"][value="substring"]').checked = true;
-  syncMethodSelect();
-  methodSelect.value = entry && entry.method ? entry.method : "";
-  statusInput.value = entry && entry.status ? entry.status : 200;
-  statusTextInput.value = "";
-  contentTypeInput.value = "";
-  bodyInput.value = "";
-  delayInput.value = "";
-  enabledInput.checked = true;
-  fieldError.textContent = "";
-  state.lastFocused = document.activeElement;
-  modal.showModal();
-  urlInput.focus();
-}
-
-function editRule(rule) {
-  state.editingId = rule.id;
-  modalTitle.textContent = t("modal_title_edit");
-  urlInput.value = rule.urlPattern || "";
-  const matchRadio = document.querySelector(`input[name="match-type"][value="${rule.matchType === "regex" ? "regex" : "substring"}"]`);
-  if (matchRadio) matchRadio.checked = true;
-  syncMethodSelect();
-  methodSelect.value = rule.method || "";
-  statusInput.value = rule.status || 200;
-  statusTextInput.value = rule.statusText || "";
-  contentTypeInput.value = rule.contentType || "";
-  bodyInput.value = rule.body || "";
-  delayInput.value = rule.delayMs || "";
-  enabledInput.checked = rule.enabled !== false;
-  fieldError.textContent = "";
-  state.lastFocused = document.activeElement;
-  modal.showModal();
-  urlInput.focus();
-}
-
-function closeModal() {
-  modal.close();
-  fieldError.textContent = "";
-  if (state.lastFocused && document.contains(state.lastFocused)) {
-    state.lastFocused.focus();
-  }
-  state.lastFocused = null;
-}
-
-function showFieldError(message) {
-  fieldError.textContent = message;
-}
-
-async function saveRuleFromForm() {
-  const matchType = document.querySelector('input[name="match-type"]:checked').value;
-  const delayMs = delayInput.value === "" ? 0 : Number(delayInput.value);
-  const rule = {
-    id: state.editingId || crypto.randomUUID(),
-    urlPattern: urlInput.value.trim(),
-    matchType,
-    method: methodSelect.value,
-    status: Number(statusInput.value),
-    statusText: statusTextInput.value.trim(),
-    contentType: contentTypeInput.value.trim(),
-    body: bodyInput.value,
-    delayMs,
-    enabled: enabledInput.checked
-  };
-
-  if (!rule.urlPattern) return showFieldError(t("error_url_required"));
-  if (!Number.isInteger(rule.status) || rule.status < 100 || rule.status > 599) return showFieldError(t("error_status_required"));
-  if (matchType === "regex") {
+  async function submitRule() {
+    const existing = state.rules.find((rule) => rule.id === state.editingId);
+    const rule = draftRule();
+    const error = validateDraft(rule);
+    if (error) { els.formError.textContent = error; return; }
+    rule.id = existing ? existing.id : Shared.createId("rule");
+    rule.createdAt = existing ? existing.createdAt : Date.now();
+    rule.updatedAt = Date.now();
+    if (Shared.NULL_BODY_STATUSES.has(rule.status)) rule.body = "";
+    const next = state.rules.filter((candidate) => candidate.id !== rule.id);
+    next.push(rule);
     try {
-      new RegExp(rule.urlPattern);
-    } catch {
-      return showFieldError(t("error_regex"));
+      await saveRules(next);
+      els.ruleDialog.close();
+      showToast(t(existing ? "saved" : "created"));
+    } catch (_error) {
+      els.formError.textContent = t("storage_error");
     }
   }
-  if (byteLength(rule.body) > MAX_BODY_BYTES) return showFieldError(t("error_body"));
-  if (!Number.isFinite(delayMs) || delayMs < 0 || delayMs > MAX_DELAY_MS) return showFieldError(t("error_delay"));
 
-  const next = state.rules.filter((r) => r.id !== rule.id);
-  if (!state.editingId && next.length >= MAX_RULES) return showFieldError(t("error_rules_limit"));
-  next.push(normalizeLocalRule(rule));
-
-  try {
-    await chrome.storage.local.set({ rm_rules: next });
-    state.rules = next;
+  async function saveRules(rules) {
+    const normalized = Shared.normalizeRules(rules);
+    await chrome.storage.local.set({ rm_rules: normalized, rm_schema_version: Shared.SCHEMA_VERSION });
+    state.rules = normalized;
+    const synced = await chrome.runtime.sendMessage({ type: "rm-sync-tab", tabId: state.currentTabId }).catch(() => null);
+    if (synced && synced.status) state.netStatus = { ...state.netStatus, ...synced };
     renderRules();
-    closeModal();
-  } catch (err) {
-    showFieldError(t("error_storage"));
-    console.error(err);
+    renderStatus();
   }
-}
 
-function getFocusable(container) {
-  return Array.from(container.querySelectorAll("a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex='-1'])")).filter(
-    (el) => el.offsetParent !== null || el === document.activeElement
-  );
-}
+  async function updateRule(id, patch) {
+    await saveRules(state.rules.map((rule) => rule.id === id ? Shared.normalizeRule({ ...rule, ...patch, updatedAt: Date.now() }) : rule));
+  }
 
-function trapModalFocus(event) {
-  if (event.key !== "Tab") return;
-  const focusable = getFocusable(modal);
-  if (!focusable.length) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
+  async function moveRule(id, direction) {
+    const ordered = sortedRules();
+    const index = ordered.findIndex((rule) => rule.id === id);
+    const swapIndex = index + direction;
+    if (index < 0 || swapIndex < 0 || swapIndex >= ordered.length) return;
+    const first = ordered[index];
+    const second = ordered[swapIndex];
+    const priority = first.priority;
+    first.priority = second.priority;
+    second.priority = priority;
+    if (first.priority === second.priority) {
+      first.priority += direction < 0 ? 1 : -1;
+    }
+    await saveRules(state.rules.map((rule) => ordered.find((candidate) => candidate.id === rule.id) || rule));
   }
-}
 
-function switchTab(which) {
-  const requestsActive = which === "requests";
-  panelRequests.classList.toggle("hidden", !requestsActive);
-  panelRules.classList.toggle("hidden", requestsActive);
-  tabRequests.setAttribute("aria-selected", String(requestsActive));
-  tabRules.setAttribute("aria-selected", String(!requestsActive));
-  tabRequests.tabIndex = requestsActive ? 0 : -1;
-  tabRules.tabIndex = requestsActive ? -1 : 0;
-}
+  async function duplicateRule(rule) {
+    if (state.rules.length >= LIMITS.maxRules) return showToast(t("rule_limit"));
+    const copy = Shared.normalizeRule({ ...rule, id: Shared.createId("rule"), name: `${ruleDisplayName(rule)} copy`, priority: nextPriority(), createdAt: Date.now(), updatedAt: Date.now() });
+    await saveRules([...state.rules, copy]);
+    showToast(t("duplicated"));
+  }
 
-function onTabKey(event) {
-  if (event.key === "ArrowRight") {
-    switchTab("requests");
-    tabRequests.focus();
-  } else if (event.key === "ArrowLeft") {
-    switchTab("rules");
-    tabRules.focus();
+  async function deleteRule(rule) {
+    state.undoRule = rule;
+    await saveRules(state.rules.filter((candidate) => candidate.id !== rule.id));
+    showToast(t("deleted"), t("undo"), async () => {
+      if (state.undoRule) await saveRules([...state.rules, state.undoRule]);
+      state.undoRule = null;
+    });
   }
-}
 
-netModeCheckbox.addEventListener("change", async () => {
-  state.netMode = netModeCheckbox.checked;
-  try {
-    await chrome.storage.local.set({ rm_net_mode: state.netMode });
-  } catch (err) {
-    showStorageError();
-    console.error(err);
+  async function copyText(text) {
+    const value = String(text);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const field = document.createElement("textarea");
+    field.value = value;
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.append(field);
+    field.select();
+    document.execCommand("copy");
+    field.remove();
   }
-  queryNetStatus();
-});
 
-maskUrlsCheckbox.addEventListener("change", async () => {
-  state.maskUrls = maskUrlsCheckbox.checked;
-  try {
-    await chrome.storage.local.set({ rm_mask_urls: state.maskUrls });
-  } catch (err) {
-    showStorageError();
-    console.error(err);
+  function showToast(message, actionLabel, action) {
+    clearTimeout(state.toastTimer);
+    els.toastText.textContent = message;
+    els.toastAction.classList.toggle("hidden", !actionLabel);
+    els.toastAction.textContent = actionLabel || "";
+    els.toastAction.onclick = action || null;
+    els.toast.classList.remove("hidden");
+    state.toastTimer = setTimeout(() => els.toast.classList.add("hidden"), actionLabel ? 5000 : 2600);
   }
-});
 
-langSelect.addEventListener("change", () => setLanguage(langSelect.value));
-panelToggle.addEventListener("click", () => setCollapsed(!state.collapsed));
-btnRefresh.addEventListener("click", refreshTab);
-btnDiag.addEventListener("click", async () => {
-  try {
-    const res = await chrome.runtime.sendMessage({ type: "rm-diag" });
-    if (res) alert(JSON.stringify(res, null, 2));
-  } catch (err) {
-    alert(String(err));
+  function exportRules() {
+    const selected = state.rules.filter((rule) => state.selectedRules.has(rule.id));
+    const rules = selected.length ? selected : state.rules;
+    if (!rules.length) return showToast(t("export_empty"));
+    const blob = new Blob([JSON.stringify({ schemaVersion: Shared.SCHEMA_VERSION, exportedAt: new Date().toISOString(), rules }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `request-override-rules-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    showToast(t("selected_export", { count: rules.length }));
   }
-});
-btnClear.addEventListener("click", clearLogs);
-btnAddRule.addEventListener("click", () => openModal(null));
-tabRequests.addEventListener("click", () => switchTab("requests"));
-tabRules.addEventListener("click", () => switchTab("rules"));
-tabRequests.addEventListener("keydown", onTabKey);
-tabRules.addEventListener("keydown", onTabKey);
-modalClose.addEventListener("click", closeModal);
-btnCancel.addEventListener("click", closeModal);
-btnSaveRule.addEventListener("click", saveRuleFromForm);
-modal.addEventListener("keydown", trapModalFocus);
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local") return;
-  if (changes.rm_rules) {
-    state.rules = normalizeLocalRules(changes.rm_rules.newValue || []);
-    renderRules();
+  async function prepareImport(file) {
+    try {
+      const parsed = JSON.parse(await file.text());
+      const rawRules = Array.isArray(parsed) ? parsed : parsed.rules;
+      const imported = Shared.normalizeRules(rawRules);
+      if (!imported.length) throw new Error("empty");
+      const ids = new Set(state.rules.map((rule) => rule.id));
+      const conflicts = imported.filter((rule) => ids.has(rule.id)).length;
+      state.pendingImport = imported;
+      els.importSummary.textContent = t("import_summary", { count: imported.length, conflicts });
+      els.importConflicts.textContent = t("import_conflicts");
+      els.importConflicts.classList.toggle("hidden", conflicts === 0);
+      els.importDialog.showModal();
+    } catch (_error) {
+      showToast(t("invalid_import"));
+    } finally {
+      els.importFile.value = "";
+    }
   }
-  if (changes.rm_net_mode) {
-    state.netMode = changes.rm_net_mode.newValue !== false;
-    netModeCheckbox.checked = state.netMode;
-    renderNetStatus();
+
+  async function finishImport(replace) {
+    if (!state.pendingImport) return;
+    let next = state.pendingImport;
+    if (!replace) {
+      const incomingIds = new Set(next.map((rule) => rule.id));
+      next = [...state.rules.filter((rule) => !incomingIds.has(rule.id)), ...next];
+    }
+    if (next.length > LIMITS.maxRules) next = next.slice(0, LIMITS.maxRules);
+    await saveRules(next);
+    state.pendingImport = null;
+    els.importDialog.close();
+    showToast(t("imported"));
   }
-  if (changes.rm_mask_urls) {
-    state.maskUrls = changes.rm_mask_urls.newValue === true;
-    maskUrlsCheckbox.checked = state.maskUrls;
+
+  async function refreshContextAndLogs() {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      const tab = tabs[0];
+      state.currentTabId = tab && tab.id != null ? tab.id : null;
+      state.currentPageUrl = tab && tab.url ? tab.url : "";
+      state.currentOrigin = Shared.normalizeOrigin(state.currentPageUrl);
+      els.pageLabel.textContent = state.currentOrigin ? new URL(state.currentOrigin).host : t("status_unavailable");
+      const [logsResponse, statusResponse] = await Promise.all([
+        chrome.runtime.sendMessage({ type: "rm-get-logs", tabId: state.currentTabId }),
+        chrome.runtime.sendMessage({ type: "rm-net-status", tabId: state.currentTabId })
+      ]);
+      state.logs = Array.isArray(logsResponse && logsResponse.entries) ? logsResponse.entries.map(Shared.normalizeLog).filter(Boolean) : [];
+      if (statusResponse) state.netStatus = statusResponse;
+    } catch (_error) {
+      state.netStatus = { status: "unavailable", error: null, applicableRuleCount: 0 };
+    }
+    renderAll();
   }
-  if (changes.rm_language && changes.rm_language.newValue !== state.language) {
-    state.language = changes.rm_language.newValue === "en" ? "en" : "ru";
-    langSelect.value = state.language;
+
+  async function loadState() {
+    const stored = await chrome.storage.local.get([
+      "rm_rules", "rm_overrides_enabled", "rm_net_mode", "rm_mask_urls", "rm_language"
+    ]);
+    state.rules = Shared.normalizeRules(stored.rm_rules);
+    state.overridesEnabled = stored.rm_overrides_enabled !== false;
+    state.netMode = stored.rm_net_mode !== false;
+    state.maskUrls = stored.rm_mask_urls === true;
+    state.language = stored.rm_language === "en" ? "en" : "ru";
+    els.network.checked = state.netMode;
+    els.mask.checked = state.maskUrls;
+    els.language.value = state.language;
+    const stats = await chrome.runtime.sendMessage({ type: "rm-rule-stats" }).catch(() => null);
+    state.ruleStats = (stats && stats.stats) || {};
     applyI18n();
+    await refreshContextAndLogs();
   }
-  if (changes.rm_panel_collapsed && changes.rm_panel_collapsed.newValue !== state.collapsed) {
-    state.collapsed = changes.rm_panel_collapsed.newValue === true;
-    updateCollapseControls();
-  }
-});
 
-(async function init() {
-  await loadSettings();
-  await refreshTab();
-  setTimeout(() => refreshTab(), 800);
+  els.tabRequests.addEventListener("click", () => switchPanel("requests"));
+  els.tabRules.addEventListener("click", () => switchPanel("rules"));
+  els.search.addEventListener("input", () => { state.requestFilter.search = els.search.value; scheduleRequestsRender(); });
+  els.methodFilter.addEventListener("change", () => { state.requestFilter.method = els.methodFilter.value; renderRequests(); });
+  els.statusFilter.addEventListener("change", () => { state.requestFilter.status = els.statusFilter.value; renderRequests(); });
+  els.mockedFilter.addEventListener("click", () => { state.requestFilter.mockedOnly = !state.requestFilter.mockedOnly; renderAll(); });
+  els.pause.addEventListener("click", () => { state.recordingPaused = !state.recordingPaused; renderAll(); });
+  els.resume.addEventListener("click", () => { state.recordingPaused = false; renderAll(); });
+  els.clear.addEventListener("click", async () => { await chrome.runtime.sendMessage({ type: "rm-clear-logs", tabId: state.currentTabId }); state.logs = []; renderRequests(); });
+  els.addRule.addEventListener("click", () => openRuleDialog());
+  els.emptyAdd.addEventListener("click", () => openRuleDialog());
+  els.quickClose.addEventListener("click", closeQuickMenu);
+  els.quickMenu.querySelectorAll("[data-preset]").forEach((button) => button.addEventListener("click", () => applyPreset(button.dataset.preset)));
+  els.customRule.addEventListener("click", () => { const entry = state.quickEntry; closeQuickMenu(); openRuleDialog({ entry }); });
+  document.addEventListener("pointerdown", (event) => { if (!els.quickMenu.classList.contains("hidden") && !els.quickMenu.contains(event.target) && !event.target.closest(".quick-button")) closeQuickMenu(); });
+
+  els.patternMode.addEventListener("click", (event) => { const button = event.target.closest("[data-pattern-mode]"); if (button) setPatternMode(button.dataset.patternMode); });
+  [els.ruleUrl, els.ruleMethod, els.ruleScope, els.rulePriority, els.ruleEnabled].forEach((element) => element.addEventListener("input", updateRulePreview));
+  els.ruleStatus.addEventListener("change", () => { els.ruleStatusText.value = Shared.defaultStatusText(Number(els.ruleStatus.value)); if (Shared.NULL_BODY_STATUSES.has(Number(els.ruleStatus.value))) els.ruleBody.value = ""; });
+  els.formatJson.addEventListener("click", () => {
+    try { els.ruleBody.value = JSON.stringify(JSON.parse(els.ruleBody.value), null, 2); els.formError.textContent = ""; } catch (_error) { els.formError.textContent = "Invalid JSON"; }
+  });
+  els.ruleDialog.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (event.submitter && event.submitter.value === "cancel") els.ruleDialog.close();
+    else void submitRule();
+  });
+
+  els.master.addEventListener("change", async () => {
+    state.overridesEnabled = els.master.checked;
+    if (!state.overridesEnabled) state.netStatus = { ...state.netStatus, status: "paused", attached: false };
+    renderStatus();
+    await chrome.storage.local.set({ rm_overrides_enabled: state.overridesEnabled });
+  });
+  els.network.addEventListener("change", async () => { state.netMode = els.network.checked; await chrome.storage.local.set({ rm_net_mode: state.netMode }); });
+  els.mask.addEventListener("change", async () => { state.maskUrls = els.mask.checked; await chrome.storage.local.set({ rm_mask_urls: state.maskUrls }); await refreshContextAndLogs(); });
+  els.language.addEventListener("change", async () => { state.language = els.language.value === "en" ? "en" : "ru"; await chrome.storage.local.set({ rm_language: state.language }); applyI18n(); });
+  els.retry.addEventListener("click", async () => { await chrome.storage.local.set({ rm_net_mode: false }); await chrome.storage.local.set({ rm_net_mode: true }); });
+  els.diagnostics.addEventListener("click", async () => { const diagnostics = await chrome.runtime.sendMessage({ type: "rm-diag" }); await copyText(JSON.stringify(diagnostics, null, 2)); showToast(t("diag_copied")); });
+
+  els.exportButton.addEventListener("click", exportRules);
+  els.importButton.addEventListener("click", () => els.importFile.click());
+  els.importFile.addEventListener("change", () => { if (els.importFile.files[0]) void prepareImport(els.importFile.files[0]); });
+  els.importCancel.addEventListener("click", () => { state.pendingImport = null; els.importDialog.close(); });
+  els.importReplace.addEventListener("click", () => void finishImport(true));
+  els.importMerge.addEventListener("click", () => void finishImport(false));
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (!message || typeof message !== "object") return;
+    if (message.type === "rm-log-live" && message.tabId === state.currentTabId && !state.recordingPaused) {
+      const entry = Shared.normalizeLog(message.entry);
+      if (entry) {
+        state.logs.push(entry);
+        if (state.logs.length > LIMITS.maxLogs) state.logs.splice(0, state.logs.length - LIMITS.maxLogs);
+        scheduleRequestsRender();
+      }
+    } else if (message.type === "rm-net-status" && message.tabId === state.currentTabId) {
+      state.netStatus = message;
+      renderStatus();
+    } else if (message.type === "rm-rule-hit") {
+      state.ruleStats[message.ruleId] = { count: message.count, lastMatchedAt: message.lastMatchedAt };
+      renderRules();
+    }
+  });
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    if (changes.rm_rules) { state.rules = Shared.normalizeRules(changes.rm_rules.newValue); renderRules(); }
+    if (changes.rm_overrides_enabled) { state.overridesEnabled = changes.rm_overrides_enabled.newValue !== false; renderStatus(); }
+    if (changes.rm_net_mode) { state.netMode = changes.rm_net_mode.newValue !== false; els.network.checked = state.netMode; }
+    if (changes.rm_mask_urls) { state.maskUrls = changes.rm_mask_urls.newValue === true; els.mask.checked = state.maskUrls; }
+  });
+
+  chrome.tabs.onActivated.addListener(() => void refreshContextAndLogs());
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => { if (tabId === state.currentTabId && (changeInfo.url || changeInfo.status === "complete")) void refreshContextAndLogs(); });
+
+  void loadState();
 })();

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Request Override fixture</title>
+  <style>
+    body { max-width: 760px; margin: 48px auto; padding: 0 20px; color: #e9edff; background: #0b0e16; font: 15px/1.5 system-ui; }
+    button { margin: 0 8px 8px 0; padding: 10px 14px; color: white; background: #6252df; border: 0; border-radius: 8px; cursor: pointer; }
+    pre { min-height: 180px; padding: 16px; border: 1px solid #293044; border-radius: 10px; background: #141925; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Request Override fixture</h1>
+  <p>Open DevTools Network, create an override from one of these requests, then repeat it.</p>
+  <button data-fetch="/api/users">Fetch users</button>
+  <button data-fetch="/api/missing">Fetch missing</button>
+  <button id="xhr">XHR JSON</button>
+  <button id="burst">20-request burst</button>
+  <pre id="output">Ready.</pre>
+  <script>
+    const output = document.getElementById("output");
+    async function runFetch(url) {
+      const started = performance.now();
+      try {
+        const response = await fetch(`${url}?token=fixture-secret&at=${Date.now()}`);
+        const body = await response.text();
+        output.textContent = JSON.stringify({ type: "fetch", url, status: response.status, statusText: response.statusText, durationMs: Math.round(performance.now() - started), body }, null, 2);
+      } catch (error) {
+        output.textContent = String(error);
+      }
+    }
+    document.querySelectorAll("[data-fetch]").forEach((button) => button.addEventListener("click", () => runFetch(button.dataset.fetch)));
+    document.getElementById("xhr").addEventListener("click", () => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", `/api/xhr?at=${Date.now()}`);
+      xhr.responseType = "json";
+      xhr.onloadend = () => { output.textContent = JSON.stringify({ type: "xhr", status: xhr.status, statusText: xhr.statusText, response: xhr.response }, null, 2); };
+      xhr.send();
+    });
+    document.getElementById("burst").addEventListener("click", () => Promise.all(Array.from({ length: 20 }, (_, index) => runFetch(`/api/burst/${index % 3}`))));
+  </script>
+</body>
+</html>

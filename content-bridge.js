@@ -1,110 +1,149 @@
 (() => {
-  const SRC = "__REQUEST_OVERRIDE__";
-  const FROM_BRIDGE = SRC + ".bridge";
-  const FROM_MAIN = SRC + ".main";
+  "use strict";
+
+  const SOURCE = "__REQUEST_OVERRIDE__";
+  const FROM_BRIDGE = `${SOURCE}.bridge`;
+  const FROM_MAIN = `${SOURCE}.main`;
+  const TOKEN_ATTRIBUTE = "data-request-override";
   const MAX_LOGS = 200;
-  const TOKEN_ATTR = "data-request-override";
-
-  const RULES_TOKEN = Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2);
-
+  const token = `${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
   const logs = [];
+  const recentMainLogs = new Map();
+  const observedTimings = new Set();
+  let context = { tabId: null, pageUrl: location.href, pageOrigin: location.origin };
 
   function publishToken() {
     try {
-      const root = document.documentElement;
-      if (root) root.setAttribute(TOKEN_ATTR, RULES_TOKEN);
-      return !!root;
-    } catch (e) {
+      if (!document.documentElement) return false;
+      document.documentElement.setAttribute(TOKEN_ATTRIBUTE, token);
+      return true;
+    } catch (_error) {
       return false;
     }
   }
-  if (!publishToken()) {
-    document.addEventListener("DOMContentLoaded", publishToken, { once: true });
+
+  function post(type, payload) {
+    try {
+      window.postMessage({ source: FROM_BRIDGE, type, token, ...payload }, "*");
+    } catch (_error) { /* page is unloading */ }
   }
 
-  function sendRulesToMain(rules) {
+  async function loadContext() {
     try {
-      window.postMessage({
-        source: FROM_BRIDGE,
-        type: "rules",
-        token: RULES_TOKEN,
-        rules: Array.isArray(rules) ? rules : []
-      }, "*");
-    } catch (e) { /* ignore */ }
+      const response = await chrome.runtime.sendMessage({ type: "rm-context" });
+      if (response) context = { ...context, ...response };
+    } catch (_error) { /* service worker unavailable */ }
+    post("context", { context });
   }
 
-  function sendNetStatusToMain(attached) {
-    try {
-      window.postMessage({
-        source: FROM_BRIDGE,
-        type: "netstatus",
-        token: RULES_TOKEN,
-        attached: !!attached
-      }, "*");
-    } catch (e) { /* ignore */ }
+  function sendSettings(rules, overridesEnabled) {
+    post("settings", {
+      rules: Array.isArray(rules) ? rules : [],
+      overridesEnabled: overridesEnabled !== false,
+      context
+    });
   }
 
-  function queryNetStatus() {
+  async function loadSettings() {
     try {
-      const p = chrome.runtime.sendMessage({ type: "rm-net-status" });
-      if (p && typeof p.then === "function") {
-        p.then((res) => {
-          if (res && res.attached != null) sendNetStatusToMain(res.attached);
-        }).catch(() => {});
-      }
-    } catch (e) { /* ignore */ }
+      const stored = await chrome.storage.local.get(["rm_rules", "rm_overrides_enabled"]);
+      sendSettings(stored.rm_rules || [], stored.rm_overrides_enabled !== false);
+    } catch (_error) {
+      sendSettings([], true);
+    }
   }
 
-  function loadRules() {
+  async function loadNetworkStatus() {
     try {
-      chrome.storage.local.get("rm_rules", (res) => {
-        sendRulesToMain(res && res.rm_rules ? res.rm_rules : []);
-      });
-    } catch (e) { /* ignore */ }
+      const response = await chrome.runtime.sendMessage({ type: "rm-net-status" });
+      if (response) post("netstatus", { attached: response.attached === true });
+    } catch (_error) {
+      post("netstatus", { attached: false });
+    }
   }
+
+  function storeLog(entry, source) {
+    if (!entry || !entry.url) return;
+    logs.push(entry);
+    if (logs.length > MAX_LOGS) logs.splice(0, logs.length - MAX_LOGS);
+    if (source === "main") recentMainLogs.set(String(entry.url), Date.now());
+    try {
+      const result = chrome.runtime.sendMessage({ type: "rm-log", entry });
+      if (result && typeof result.catch === "function") result.catch(() => {});
+    } catch (_error) { /* extension context is unloading */ }
+  }
+
+  function observeResource(entry) {
+    if (!entry || !["fetch", "xmlhttprequest"].includes(entry.initiatorType)) return;
+    const key = `${entry.name}|${entry.startTime}|${entry.initiatorType}`;
+    if (observedTimings.has(key)) return;
+    observedTimings.add(key);
+    setTimeout(() => {
+      const lastMainLog = recentMainLogs.get(String(entry.name)) || 0;
+      if (Date.now() - lastMainLog < 2000) return;
+      storeLog({
+        id: `timing:${key}`,
+        ts: Math.round((performance.timeOrigin || Date.now()) + entry.startTime),
+        method: "GET",
+        url: String(entry.name),
+        status: Number(entry.responseStatus) || 0,
+        statusText: "",
+        durationMs: Math.max(0, Math.round(entry.duration || 0)),
+        mocked: false,
+        mode: "native",
+        frame: window.top === window ? "top" : "child"
+      }, "timing");
+    }, 500);
+  }
+
+  try {
+    const observer = new PerformanceObserver((list) => list.getEntries().forEach(observeResource));
+    observer.observe({ type: "resource", buffered: true });
+  } catch (_error) { /* Resource Timing is unavailable */ }
+
+  function initializeBridge() {
+    if (!publishToken()) return false;
+    void loadContext().then(loadSettings);
+    void loadNetworkStatus();
+    return true;
+  }
+
+  if (!initializeBridge()) document.addEventListener("DOMContentLoaded", initializeBridge, { once: true });
 
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
-    if (!data || typeof data !== "object") return;
-    if (data.source !== FROM_MAIN) return;
-
+    if (!data || typeof data !== "object" || data.source !== FROM_MAIN) return;
     if (data.type === "hello") {
-      loadRules();
-    } else if (data.type === "log" && data.entry) {
-      logs.push(data.entry);
-      if (logs.length > MAX_LOGS) logs.splice(0, logs.length - MAX_LOGS);
-      try {
-        const p = chrome.runtime.sendMessage({ type: "rm-log", entry: data.entry });
-        if (p && typeof p.catch === "function") p.catch(() => {});
-      } catch (e) { /* ignore */ }
+      void loadContext().then(loadSettings);
+      void loadNetworkStatus();
+      return;
+    }
+    if (data.type === "log" && data.entry) {
+      storeLog(data.entry, "main");
     }
   });
 
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (!msg || typeof msg !== "object") return;
-    if (msg.type === "rm-rules") {
-      sendRulesToMain(msg.rules);
-    } else if (msg.type === "rm-net-status-tab") {
-      sendNetStatusToMain(msg.attached);
-    } else if (msg.type === "rm-get-logs") {
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (!message || typeof message !== "object") return undefined;
+    if (message.type === "rm-settings") {
+      sendSettings(message.rules, message.overridesEnabled);
+    } else if (message.type === "rm-net-status-tab") {
+      post("netstatus", { attached: message.attached === true });
+    } else if (message.type === "rm-get-logs") {
       sendResponse({ entries: logs.slice() });
       return true;
-    } else if (msg.type === "rm-clear-logs") {
+    } else if (message.type === "rm-clear-logs") {
       logs.length = 0;
       sendResponse({ ok: true });
       return true;
     }
+    return undefined;
   });
 
-  try {
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === "local" && changes.rm_rules) {
-        sendRulesToMain(changes.rm_rules.newValue || []);
-      }
-    });
-  } catch (e) { /* ignore */ }
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    if (changes.rm_rules || changes.rm_overrides_enabled) void loadSettings();
+  });
 
-  loadRules();
-  queryNetStatus();
 })();
