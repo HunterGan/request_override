@@ -5,6 +5,7 @@
   const FROM_BRIDGE = `${SOURCE}.bridge`;
   const FROM_MAIN = `${SOURCE}.main`;
   const TOKEN_ATTRIBUTE = "data-request-override";
+  const LOG_EVENT = "__request_override_response_log__";
   const MAX_LOGS = 200;
   const token = `${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
   const logs = [];
@@ -64,6 +65,11 @@
 
   function storeLog(entry, source) {
     if (!entry || !entry.url) return;
+    const existingIndex = logs.findIndex((candidate) => candidate.id && candidate.id === entry.id);
+    if (existingIndex >= 0) {
+      logs[existingIndex] = entry;
+      return;
+    }
     logs.push(entry);
     if (logs.length > MAX_LOGS) logs.splice(0, logs.length - MAX_LOGS);
     if (source === "main") recentMainLogs.set(String(entry.url), Date.now());
@@ -122,6 +128,10 @@
     if (data.type === "log" && data.entry) {
       storeLog(data.entry, "main");
     }
+  });
+
+  window.addEventListener(LOG_EVENT, (event) => {
+    if (event && event.detail) storeLog(event.detail, "main");
   });
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

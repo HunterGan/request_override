@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.3
+## 1.2.5
 
 - Added a canonical versioned rule/log schema with lossless migration from legacy `delay` and `duration` fields.
 - Fixed live request delivery, request history restoration, delays, durations, and status validation.
@@ -14,6 +14,8 @@
 - Promoted DevTools status mode into the header, clarified URL-parameter masking, and fixed clipped select focus states.
 - Removed the misleading internal collapse control because extensions cannot resize Chrome's system side panel.
 - Fixed native select option contrast in Chrome and removed obsolete internal planning documents.
+- Captured text/JSON response bodies in memory and prefilled rule body and Content-Type from request rows.
+- Made response-body enrichment independent of browser event order and service-worker buffer lifetime.
 - Added contract tests, CDP 500/preflight tests, and a manual Chrome fixture.
 
 ## 1.1.0

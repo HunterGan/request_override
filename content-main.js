@@ -9,6 +9,7 @@
   const FROM_BRIDGE = `${SOURCE}.bridge`;
   const FROM_MAIN = `${SOURCE}.main`;
   const TOKEN_ATTRIBUTE = "data-request-override";
+  const LOG_EVENT = "__request_override_response_log__";
   const FRAME_UID = `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
   const regexCache = new Map();
   let rules = [];
@@ -23,9 +24,12 @@
     try {
       window.postMessage({ source: FROM_MAIN, type: "log", entry }, "*");
     } catch (_error) { /* page is unloading */ }
+    try {
+      window.dispatchEvent(new CustomEvent(LOG_EVENT, { detail: entry }));
+    } catch (_error) { /* secondary bridge unavailable */ }
   }
 
-  function logRequest(method, url, status, durationMs, mocked, statusText, mode, ruleId) {
+  function logRequest(method, url, status, durationMs, mocked, statusText, mode, ruleId, capture) {
     postLog(Shared.normalizeLog({
       id: `${Date.now()}:${++logSequence}:${FRAME_UID}`,
       frame: topFrame ? "top" : "child",
@@ -37,8 +41,45 @@
       durationMs,
       mocked,
       mode,
-      ruleId
+      ruleId,
+      responseCaptured: capture && capture.responseCaptured === true,
+      responseBody: capture && capture.responseBody,
+      responseContentType: capture && capture.responseContentType,
+      responseBodyTruncated: capture && capture.responseBodyTruncated === true
     }));
+  }
+
+  async function captureFetchResponse(response) {
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.body || Shared.NULL_BODY_STATUSES.has(response.status)) {
+      return { responseCaptured: true, responseBody: "", responseContentType: contentType };
+    }
+    const declaredLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > Shared.LIMITS.maxBodyBytes) {
+      return { responseCaptured: false, responseBody: "", responseContentType: contentType, responseBodyTruncated: true };
+    }
+    let clone;
+    try { clone = response.clone(); } catch (_error) { return { responseCaptured: false, responseBody: "", responseContentType: contentType }; }
+    try {
+      const reader = clone.body.getReader();
+      const decoder = new TextDecoder();
+      let total = 0;
+      let body = "";
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        total += part.value.byteLength;
+        if (total > Shared.LIMITS.maxBodyBytes) {
+          await reader.cancel().catch(() => {});
+          return { responseCaptured: false, responseBody: "", responseContentType: contentType, responseBodyTruncated: true };
+        }
+        body += decoder.decode(part.value, { stream: true });
+      }
+      body += decoder.decode();
+      return { responseCaptured: true, responseBody: body, responseContentType: contentType };
+    } catch (_error) {
+      return { responseCaptured: false, responseBody: "", responseContentType: contentType };
+    }
   }
 
   function findRule(url, method) {
@@ -139,15 +180,18 @@
             });
           }
           const response = createMockResponse(rule, url, method);
-          logRequest(method, url, response.status, performance.now() - startedAt, true, response.statusText, "in-page", rule.id);
+          logRequest(method, url, response.status, performance.now() - startedAt, true, response.statusText, "in-page", rule.id, {
+            responseCaptured: true, responseBody: rule.body || "", responseContentType: rule.contentType || ""
+          });
           return response;
         })();
       }
 
       const promise = nativeFetch(input, init);
       promise.then(
-        (response) => {
+        async (response) => {
           const mocked = !!rule && netAttached && response.status === rule.status;
+          const capture = await captureFetchResponse(response);
           logRequest(
             method,
             url,
@@ -156,7 +200,8 @@
             mocked,
             response.statusText,
             mocked ? "network" : "native",
-            mocked ? rule.id : null
+            mocked ? rule.id : null,
+            capture
           );
         },
         () => logRequest(method, url, 0, performance.now() - startedAt, false, "", "native", null)
@@ -283,7 +328,9 @@
         fire(this, "readystatechange");
         fire(this, "load");
         fire(this, "loadend");
-        logRequest(method, url, rule.status, performance.now() - startedAt, true, rule.statusText, "in-page", rule.id);
+        logRequest(method, url, rule.status, performance.now() - startedAt, true, rule.statusText, "in-page", rule.id, {
+          responseCaptured: true, responseBody: body, responseContentType: rule.contentType || ""
+        });
       };
 
       this.__roTimer = setTimeout(applyMock, rule.delayMs);
@@ -293,6 +340,19 @@
 
     this.addEventListener("loadend", () => {
       const mocked = !!rule && netAttached && this.status === rule.status;
+      let responseCaptured = false;
+      let responseBody = "";
+      let responseContentType = "";
+      try { responseContentType = nativeGetResponseHeader.call(this, "content-type") || ""; } catch (_error) { /* unavailable */ }
+      try {
+        if (!this.responseType || this.responseType === "text") {
+          responseBody = this.responseText || "";
+          responseCaptured = Shared.byteLength(responseBody) <= Shared.LIMITS.maxBodyBytes;
+        } else if (this.responseType === "json") {
+          responseBody = JSON.stringify(this.response, null, 2);
+          responseCaptured = Shared.byteLength(responseBody) <= Shared.LIMITS.maxBodyBytes;
+        }
+      } catch (_error) { /* binary or inaccessible response */ }
       logRequest(
         method,
         url,
@@ -301,7 +361,8 @@
         mocked,
         this.statusText,
         mocked ? "network" : "native",
-        mocked ? rule.id : null
+        mocked ? rule.id : null,
+        { responseCaptured, responseBody: responseCaptured ? responseBody : "", responseContentType, responseBodyTruncated: !responseCaptured && !!responseBody }
       );
     }, { once: true });
     try {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Request Override",
-  "version": "1.2.3",
+  "version": "1.2.5",
   "description": "Override HTTP responses (status code + body) for testing web applications.",
   "permissions": [
     "sidePanel",

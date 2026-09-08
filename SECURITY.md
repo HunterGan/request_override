@@ -15,7 +15,7 @@ Request Override is a local developer tool. It does not send request logs, rules
 
 The extension runs untrusted page JavaScript in the page's MAIN world. Page scripts can observe the injected mock behavior and may forge rule-update messages for their own frame. This limitation is inherent to content-script-based page patches.
 
-Request logs may contain URL parameters. Enable **Hide URL parameters** if logs should not store their values.
+Request logs may contain URL parameters and text/JSON response bodies up to 1 MB while the tab is open. Enable **Hide URL parameters** if logs should not retain parameter values; clear the journal after testing sensitive responses.
 
 The extension attaches the debugger only to tabs that have at least one applicable enabled rule. Current-site scope is the default for new rules; an explicit all-sites rule can still attach to every http(s) tab.
 

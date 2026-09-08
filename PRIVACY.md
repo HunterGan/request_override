@@ -18,6 +18,6 @@ The extension does not:
 - upload response bodies;
 - require an account.
 
-Request logs are kept only in memory, capped at 200 entries per tab, and only the current tab is shown. They may include URL parameters. You can clear them from the side panel and hide parameter values with the **Hide URL parameters** option.
+Request logs are kept only in memory, capped at 200 entries per tab, and only the current tab is shown. They may include URL parameters and captured text/JSON response bodies up to 1 MB. You can clear them from the side panel and hide URL parameter values with the **Hide URL parameters** option. Response bodies are never written to `chrome.storage.local`.
 
 Rule hit counters are session-only diagnostics and are not uploaded.

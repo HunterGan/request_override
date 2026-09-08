@@ -108,7 +108,7 @@ async function loadBackground(storedRules) {
   await check("manifest is MV3 v1.2 and loads shared runtime", () => {
     const manifest = JSON.parse(source("manifest.json"));
     equal(manifest.manifest_version, 3, "manifest version");
-    equal(manifest.version, "1.2.3", "extension version");
+    equal(manifest.version, "1.2.5", "extension version");
     assert(manifest.permissions.includes("debugger"), "debugger permission is required for DevTools-visible statuses");
     assert(manifest.permissions.includes("webRequest"), "webRequest permission is required for a reliable request journal");
     const main = manifest.content_scripts.find((item) => item.world === "MAIN");
@@ -125,12 +125,44 @@ async function loadBackground(storedRules) {
   });
 
   await check("log duration migrates and history contract uses entries", () => {
-    const log = Shared.normalizeLog({ url: "https://api.test/items", duration: 42.4, status: 200 });
+    const log = Shared.normalizeLog({ url: "https://api.test/items", duration: 42.4, status: 200, responseCaptured: true, responseBody: '{"ok":true}', responseContentType: "application/json" });
     equal(log.durationMs, 42, "duration migration");
+    equal(log.responseBody, '{"ok":true}', "captured response body");
     assert(source("background.js").includes("sendResponse({ entries:"), "background response key must be entries");
     assert(source("sidepanel/app.js").includes("logsResponse.entries"), "side panel must read entries");
     assert(source("sidepanel/app.js").includes('message.type === "rm-log-live"'), "side panel must subscribe to live logs");
     assert(source("content-bridge.js").includes("new PerformanceObserver"), "resource timing fallback must keep the journal observable");
+  });
+
+  await check("MAIN-world fetch capture includes the original body", async () => {
+    const messages = [];
+    const messageListeners = [];
+    const page = {
+      RequestOverrideShared: Shared,
+      top: null,
+      addEventListener(type, listener) { if (type === "message") messageListeners.push(listener); },
+      postMessage(data) {
+        messages.push(data);
+        for (const listener of messageListeners) listener({ source: page, data });
+      },
+      fetch: async () => new Response('{"from":"server"}', { status: 200, headers: { "Content-Type": "application/json" } }),
+      XMLHttpRequest: undefined
+    };
+    page.top = page;
+    const sandbox = {
+      window: page, globalThis: page, location: new URL("https://app.test/page"),
+      document: { documentElement: { getAttribute: () => "token" }, addEventListener() {} },
+      performance, URL, Request, Response, Headers, TextEncoder, TextDecoder, DOMException,
+      setTimeout, clearTimeout, console
+    };
+    vm.runInContext(source("content-main.js"), vm.createContext(sandbox), { filename: "content-main.js" });
+    const response = await page.fetch("https://api.test/items");
+    await response.text();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const logged = messages.find((message) => message.type === "log");
+    assert(logged && logged.entry.responseCaptured, "fetch response was not captured");
+    equal(logged.entry.responseBody, '{"from":"server"}', "fetch response body");
+    equal(logged.entry.responseContentType, "application/json", "fetch response content type");
   });
 
   await check("compact panel keeps settings labels and content visible", () => {
@@ -170,10 +202,23 @@ async function loadBackground(storedRules) {
     const { chrome } = await loadBackground([]);
     chrome.__listeners.webBefore({ tabId: 12, frameId: 0, requestId: "native-1", timeStamp: 1000, method: "GET", url: "https://api.test/items" });
     chrome.__listeners.webCompleted({ tabId: 12, frameId: 0, requestId: "native-1", timeStamp: 1042, method: "GET", url: "https://api.test/items", statusCode: 200 });
+    chrome.__listeners.message({ type: "rm-log", entry: { ts: 1042, method: "GET", url: "https://api.test/items", status: 200, mode: "native", responseCaptured: true, responseBody: '{"items":[1]}', responseContentType: "application/json" } }, { tab: { id: 12 }, frameId: 0 }, () => {});
     const response = await new Promise((resolve) => chrome.__listeners.message({ type: "rm-get-logs", tabId: 12 }, {}, resolve));
     equal(response.entries.length, 1, "journal entry count");
     equal(response.entries[0].status, 200, "journal response status");
     equal(response.entries[0].durationMs, 42, "journal duration");
+    equal(response.entries[0].responseBody, '{"items":[1]}', "journal captured body");
+    assert(source("sidepanel/app.js").includes("entry && entry.responseCaptured ? entry.responseBody"), "rule dialog must use the captured response body");
+  });
+
+  await check("response capture joins the journal in either event order", async () => {
+    const { chrome } = await loadBackground([]);
+    chrome.__listeners.message({ type: "rm-log", entry: { ts: 2000, method: "POST", url: "https://api.test/save", status: 201, mode: "native", responseCaptured: true, responseBody: '{"id":7}', responseContentType: "application/json" } }, { tab: { id: 13 }, frameId: 0 }, () => {});
+    chrome.__listeners.webBefore({ tabId: 13, frameId: 0, requestId: "native-2", timeStamp: 1990, method: "POST", url: "https://api.test/save" });
+    chrome.__listeners.webCompleted({ tabId: 13, frameId: 0, requestId: "native-2", timeStamp: 2000, method: "POST", url: "https://api.test/save", statusCode: 201 });
+    const response = await new Promise((resolve) => chrome.__listeners.message({ type: "rm-get-logs", tabId: 13 }, {}, resolve));
+    equal(response.entries[0].responseBody, '{"id":7}', "queued response body");
+    assert(source("sidepanel/app.js").includes('message.type === "rm-log-capture"'), "side panel must receive capture updates directly");
   });
 
   await check("CDP fulfills a 500 response visible to DevTools", async () => {

@@ -25,7 +25,7 @@
 
 1. Откройте страницу, которая делает `fetch` или `XMLHttpRequest` запросы.
 2. В панели на вкладке **Запросы** появятся live-строки: метод, имя запроса, статус, длительность, полный URL и бейдж `MOCKED` для подменённых запросов.
-3. Правый клик (или левый клик / Enter) по строке запроса открывает форму правила.
+3. Правый клик (или левый клик / Enter) по строке запроса открывает форму правила. Для текстового или JSON-ответа автоматически подставляются исходные `Content-Type` и тело ответа.
 4. Заполните нужные поля и нажмите **Сохранить правило**.
 5. Совпадающие запросы теперь возвращают заданный ответ.
 6. Вкладка **Правила** позволяет включать, редактировать и удалять правила без перезагрузки страницы.
@@ -93,6 +93,7 @@ tests/                 Локальная fixture-страница и ручно
 
 - Работает только с http(s)-страницами. `chrome://`, extension pages, web store и `file://` исключены.
 - Логируются и мокаются только `fetch` и `XMLHttpRequest`. Subresources (`<script>`, `<img>`, `<link>`) и WebSockets не видны.
+- Текстовые и JSON-тела ответов захватываются только в памяти и только до 1 МБ. Бинарные и более крупные ответы в форму не подставляются.
 - Сетевой режим требует permission `debugger`. Chrome показывает предупреждение о расширенных правах и плашку debugging.
 - Если DevTools или другое расширение уже подключены к вкладке, debugger может не подключиться; расширение переходит в in-page fallback.
 - В состоянии **In-page fallback** подмена работает для fetch/XHR, но синтетический ответ не появляется в DevTools Network. Для видимого сетевого статуса состояние панели должно быть **Сетевой перехват активен**.
@@ -152,7 +153,7 @@ After changes, press the refresh button on the extension card.
 
 1. Open a page that makes `fetch` or `XMLHttpRequest` requests.
 2. In the **Requests** tab you will see live rows: method, request name, status, duration, full URL, and a `MOCKED` badge for mocked requests.
-3. Right-click (or left-click / Enter) a request row to open the rule form.
+3. Right-click (or left-click / Enter) a request row to open the rule form. Original `Content-Type` and body are prefilled for text and JSON responses.
 4. Fill in the required fields and click **Save rule**.
 5. Matching requests now return the configured response.
 6. The **Rules** tab lets you enable, edit, and delete rules without reloading the page.
@@ -220,6 +221,7 @@ tests/                 Local fixture page and manual Chrome E2E scenario
 
 - Works only with http(s) pages. `chrome://`, extension pages, web store, and `file://` pages are excluded.
 - Only `fetch` and `XMLHttpRequest` are logged and mocked. Subresources (`<script>`, `<img>`, `<link>`) and WebSockets are invisible.
+- Text and JSON response bodies are captured in memory up to 1 MB. Binary and larger responses are not prefilled.
 - Network-level mode requires the `debugger` permission. Chrome shows an elevated-permission warning and a debugging infobar.
 - If DevTools or another extension already owns the tab debugger, attach may fail; the extension falls back to in-page mode.
 - In **In-page fallback**, fetch/XHR mocking still works but the synthetic response is absent from DevTools Network. The panel must say **Network interception active** for a DevTools-visible status.

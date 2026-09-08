@@ -74,7 +74,7 @@
     netStatus: { status: "starting", error: null, applicableRuleCount: 0 }, activePanel: "requests",
     requestFilter: { search: "", method: "", status: "", mockedOnly: false }, expandedGroups: new Set(),
     selectedRules: new Set(), ruleStats: {}, editingId: null, sourceEntry: null, patternMode: "path",
-    quickEntry: null, pendingImport: null, undoRule: null, renderScheduled: false, toastTimer: null
+    quickEntry: null, pendingImport: null, undoRule: null, pendingCaptures: [], renderScheduled: false, toastTimer: null
   };
 
   const $ = (id) => document.getElementById(id);
@@ -181,6 +181,41 @@
       groups.get(key).entries.push(entry);
     }
     return Array.from(groups.values());
+  }
+
+  function captureMatchesEntry(entry, capture) {
+    return entry.method === capture.method &&
+      Shared.smartPattern(entry.url) === Shared.smartPattern(capture.url) &&
+      Math.abs(entry.ts - capture.ts) < 300000;
+  }
+
+  function applyCapture(entry, capture) {
+    entry.responseCaptured = capture.responseCaptured === true;
+    entry.responseBody = capture.responseBody || "";
+    entry.responseContentType = capture.responseContentType || "";
+    entry.responseBodyTruncated = capture.responseBodyTruncated === true;
+    if (capture.mocked) {
+      entry.mocked = true;
+      entry.mode = capture.mode;
+      entry.ruleId = capture.ruleId;
+    }
+  }
+
+  function enrichEntryFromPendingCapture(entry) {
+    const index = state.pendingCaptures.findIndex((capture) => captureMatchesEntry(entry, capture));
+    if (index < 0) return;
+    const [capture] = state.pendingCaptures.splice(index, 1);
+    applyCapture(entry, capture);
+  }
+
+  function receiveCapture(rawCapture) {
+    const capture = Shared.normalizeLog(rawCapture);
+    if (!capture) return;
+    const entry = state.logs.slice().reverse().find((candidate) => !candidate.responseCaptured && captureMatchesEntry(candidate, capture));
+    if (entry) applyCapture(entry, capture);
+    else state.pendingCaptures.push(capture);
+    if (state.pendingCaptures.length > 50) state.pendingCaptures.splice(0, state.pendingCaptures.length - 50);
+    scheduleRequestsRender();
   }
 
   function scheduleRequestsRender() {
@@ -419,8 +454,8 @@
     els.ruleMethod.value = rule ? rule.method : entry ? entry.method : "";
     els.ruleStatus.value = rule ? rule.status : entry && entry.status >= 200 ? entry.status : 200;
     els.ruleStatusText.value = rule ? rule.statusText : Shared.defaultStatusText(Number(els.ruleStatus.value));
-    els.ruleContentType.value = rule ? rule.contentType : "application/json; charset=utf-8";
-    els.ruleBody.value = rule ? rule.body : "";
+    els.ruleContentType.value = rule ? rule.contentType : entry && entry.responseContentType ? entry.responseContentType : "application/json; charset=utf-8";
+    els.ruleBody.value = rule ? rule.body : entry && entry.responseCaptured ? entry.responseBody : "";
     els.ruleDelay.value = rule ? rule.delayMs : 0;
     els.rulePriority.value = rule ? rule.priority : nextPriority();
     els.ruleEnabled.checked = rule ? rule.enabled : true;
@@ -590,9 +625,11 @@
 
   async function refreshContextAndLogs() {
     try {
+      const previousTabId = state.currentTabId;
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       const tab = tabs[0];
       state.currentTabId = tab && tab.id != null ? tab.id : null;
+      if (previousTabId !== state.currentTabId) state.pendingCaptures = [];
       state.currentPageUrl = tab && tab.url ? tab.url : "";
       state.currentOrigin = Shared.normalizeOrigin(state.currentPageUrl);
       els.pageLabel.textContent = state.currentOrigin ? new URL(state.currentOrigin).host : t("status_unavailable");
@@ -678,10 +715,15 @@
     if (message.type === "rm-log-live" && message.tabId === state.currentTabId && !state.recordingPaused) {
       const entry = Shared.normalizeLog(message.entry);
       if (entry) {
-        state.logs.push(entry);
+        enrichEntryFromPendingCapture(entry);
+        const existingIndex = state.logs.findIndex((candidate) => candidate.id === entry.id);
+        if (existingIndex >= 0) state.logs[existingIndex] = entry;
+        else state.logs.push(entry);
         if (state.logs.length > LIMITS.maxLogs) state.logs.splice(0, state.logs.length - LIMITS.maxLogs);
         scheduleRequestsRender();
       }
+    } else if (message.type === "rm-log-capture" && message.tabId === state.currentTabId) {
+      receiveCapture(message.capture);
     } else if (message.type === "rm-net-status" && message.tabId === state.currentTabId) {
       state.netStatus = message;
       renderStatus();

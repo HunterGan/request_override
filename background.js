@@ -7,6 +7,7 @@ const logBuffers = new Map();
 const tabStates = new Map();
 const pendingRequests = new Map();
 const observedRequests = new Map();
+const pendingResponseCaptures = new Map();
 const regexCache = new Map();
 const ruleStats = new Map();
 const pausedLog = [];
@@ -61,9 +62,52 @@ function pushLogBuffer(tabId, entry) {
 
 function publishLog(tabId, rawEntry, frameId) {
   const entry = sanitizeLogEntry(rawEntry, tabId, frameId);
-  if (!entry) return;
+  if (!entry) return null;
   pushLogBuffer(tabId, entry);
   chrome.runtime.sendMessage({ type: "rm-log-live", entry, tabId }).catch(() => {});
+  return entry;
+}
+
+function sameCapturedRequest(entry, capture) {
+  return entry.method === capture.method &&
+    Shared.smartPattern(entry.url) === Shared.smartPattern(capture.url) &&
+    Math.abs(entry.ts - capture.ts) < 300000;
+}
+
+function applyResponseCapture(tabId, entry, capture) {
+  entry.responseCaptured = capture.responseCaptured;
+  entry.responseBody = capture.responseBody;
+  entry.responseContentType = capture.responseContentType;
+  entry.responseBodyTruncated = capture.responseBodyTruncated;
+  if (capture.mocked) {
+    entry.mocked = true;
+    entry.mode = capture.mode;
+    entry.ruleId = capture.ruleId;
+  }
+  chrome.runtime.sendMessage({ type: "rm-log-live", entry, tabId }).catch(() => {});
+}
+
+function enrichOrQueueResponseCapture(tabId, capture) {
+  chrome.runtime.sendMessage({ type: "rm-log-capture", tabId, capture }).catch(() => {});
+  const buffer = logBuffers.get(tabId) || [];
+  const entry = buffer.slice().reverse().find((candidate) => !candidate.responseCaptured && sameCapturedRequest(candidate, capture));
+  if (entry) {
+    applyResponseCapture(tabId, entry, capture);
+    return;
+  }
+  const queue = pendingResponseCaptures.get(tabId) || [];
+  queue.push(capture);
+  pendingResponseCaptures.set(tabId, queue.slice(-50));
+}
+
+function consumeResponseCapture(tabId, entry) {
+  const queue = pendingResponseCaptures.get(tabId);
+  if (!queue || !queue.length) return;
+  const index = queue.findIndex((capture) => sameCapturedRequest(entry, capture));
+  if (index < 0) return;
+  const [capture] = queue.splice(index, 1);
+  if (!queue.length) pendingResponseCaptures.delete(tabId);
+  applyResponseCapture(tabId, entry, capture);
 }
 
 function observedRequestKey(details) {
@@ -93,7 +137,7 @@ function finishObservedRequest(details, failed) {
   const status = failed ? 0 : Number(details.statusCode) || 0;
   const rule = findRule(started.url, started.method, contextForTabId(details.tabId));
   const mocked = !!rule && isNetworkReady(details.tabId) && status === rule.status;
-  publishLog(details.tabId, {
+  const entry = publishLog(details.tabId, {
     id: `web:${details.requestId}:${Math.round(started.ts)}`,
     ts: endedAt,
     method: started.method,
@@ -106,6 +150,7 @@ function finishObservedRequest(details, failed) {
     ruleId: mocked ? rule.id : null,
     frameId: started.frameId
   }, started.frameId);
+  if (entry) consumeResponseCapture(details.tabId, entry);
 }
 
 function getTabState(tabId) {
@@ -476,6 +521,7 @@ async function activeTab() {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   logBuffers.delete(tabId);
+  pendingResponseCaptures.delete(tabId);
   tabStates.delete(tabId);
   cancelPendingRequestsForTab(tabId, true);
   for (const [key, request] of observedRequests.entries()) {
@@ -560,6 +606,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       pushLogBuffer(sender.tab.id, entry);
       if (entry.mocked && entry.ruleId) recordRuleHit(entry.ruleId, sender.tab.id);
       chrome.runtime.sendMessage({ type: "rm-log-live", entry, tabId: sender.tab.id }).catch(() => {});
+    } else if (entry && (entry.responseCaptured || entry.responseBodyTruncated || entry.responseContentType)) {
+      enrichOrQueueResponseCapture(sender.tab.id, entry);
     }
     return undefined;
   }
