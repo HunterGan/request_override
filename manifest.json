@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Request Override",
-  "version": "1.1.0",
+  "version": "1.2.3",
   "description": "Override HTTP responses (status code + body) for testing web applications.",
   "permissions": [
     "sidePanel",
     "storage",
     "tabs",
-    "debugger"
+    "debugger",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -34,13 +35,13 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content-bridge.js"],
+      "js": ["shared.js", "content-bridge.js"],
       "run_at": "document_start",
       "all_frames": true
     },
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["content-main.js"],
+      "js": ["shared.js", "content-main.js"],
       "run_at": "document_start",
       "all_frames": true,
       "world": "MAIN"
