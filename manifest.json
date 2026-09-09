@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Request Override",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Override HTTP responses (status code + body) for testing web applications.",
   "permissions": [
     "sidePanel",
@@ -35,7 +35,7 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["shared.js", "content-bridge.js"],
+      "js": ["content-bridge.js"],
       "run_at": "document_start",
       "all_frames": true
     },

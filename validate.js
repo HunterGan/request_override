@@ -108,11 +108,13 @@ async function loadBackground(storedRules) {
   await check("manifest is MV3 v1.2 and loads shared runtime", () => {
     const manifest = JSON.parse(source("manifest.json"));
     equal(manifest.manifest_version, 3, "manifest version");
-    equal(manifest.version, "1.2.5", "extension version");
+    equal(manifest.version, "1.2.6", "extension version");
     assert(manifest.permissions.includes("debugger"), "debugger permission is required for DevTools-visible statuses");
     assert(manifest.permissions.includes("webRequest"), "webRequest permission is required for a reliable request journal");
     const main = manifest.content_scripts.find((item) => item.world === "MAIN");
     assert(main && main.js[0] === "shared.js" && main.js.includes("content-main.js"), "MAIN world must load shared.js first");
+    const isolated = manifest.content_scripts.find((item) => item !== main);
+    assert(isolated && !isolated.js.includes("shared.js"), "shared.js must not be listed in several content_scripts entries: Chrome 145 dedupes injected files and silently drops the MAIN-world copy, killing fetch/XHR instrumentation");
     assert(source("sidepanel/index.html").includes('<script src="../shared.js"></script>'), "side panel must load shared.js");
   });
 
@@ -219,6 +221,37 @@ async function loadBackground(storedRules) {
     const response = await new Promise((resolve) => chrome.__listeners.message({ type: "rm-get-logs", tabId: 13 }, {}, resolve));
     equal(response.entries[0].responseBody, '{"id":7}', "queued response body");
     assert(source("sidepanel/app.js").includes('message.type === "rm-log-capture"'), "side panel must receive capture updates directly");
+  });
+
+  await check("parallel same-endpoint captures enrich the closest entries", async () => {
+    const { chrome } = await loadBackground([]);
+    chrome.__listeners.webBefore({ tabId: 21, frameId: 0, requestId: "par-1", timeStamp: 900, method: "GET", url: "https://api.test/items" });
+    chrome.__listeners.webCompleted({ tabId: 21, frameId: 0, requestId: "par-1", timeStamp: 1000, method: "GET", url: "https://api.test/items", statusCode: 200 });
+    chrome.__listeners.webBefore({ tabId: 21, frameId: 0, requestId: "par-2", timeStamp: 1100, method: "GET", url: "https://api.test/items" });
+    chrome.__listeners.webCompleted({ tabId: 21, frameId: 0, requestId: "par-2", timeStamp: 1200, method: "GET", url: "https://api.test/items", statusCode: 200 });
+    chrome.__listeners.message({ type: "rm-log", entry: { ts: 1010, method: "GET", url: "https://api.test/items?page=1", status: 200, mode: "native", responseCaptured: true, responseBody: '{"first":true}', responseContentType: "application/json" } }, { tab: { id: 21 }, frameId: 0 }, () => {});
+    chrome.__listeners.message({ type: "rm-log", entry: { ts: 1190, method: "GET", url: "https://api.test/items?page=2", status: 200, mode: "native", responseCaptured: true, responseBody: '{"second":true}', responseContentType: "application/json" } }, { tab: { id: 21 }, frameId: 0 }, () => {});
+    const response = await new Promise((resolve) => chrome.__listeners.message({ type: "rm-get-logs", tabId: 21 }, {}, resolve));
+    const ordered = response.entries.slice().sort((a, b) => a.ts - b.ts);
+    equal(ordered.length, 2, "journal entry count");
+    equal(ordered[0].responseBody, '{"first":true}', "earlier request keeps its own body");
+    equal(ordered[1].responseBody, '{"second":true}', "later request keeps its own body");
+  });
+
+  await check("queued captures are consumed by the closest timestamp", async () => {
+    const { chrome } = await loadBackground([]);
+    const captureMessage = (ts, body) => ({ type: "rm-log", entry: { ts, method: "GET", url: "https://api.test/poll", status: 200, mode: "native", responseCaptured: true, responseBody: body, responseContentType: "application/json" } });
+    chrome.__listeners.message(captureMessage(1190, '{"late":true}'), { tab: { id: 14 }, frameId: 0 }, () => {});
+    chrome.__listeners.message(captureMessage(1010, '{"early":true}'), { tab: { id: 14 }, frameId: 0 }, () => {});
+    chrome.__listeners.webBefore({ tabId: 14, frameId: 0, requestId: "queued-1", timeStamp: 900, method: "GET", url: "https://api.test/poll" });
+    chrome.__listeners.webCompleted({ tabId: 14, frameId: 0, requestId: "queued-1", timeStamp: 1000, method: "GET", url: "https://api.test/poll", statusCode: 200 });
+    chrome.__listeners.webBefore({ tabId: 14, frameId: 0, requestId: "queued-2", timeStamp: 1150, method: "GET", url: "https://api.test/poll" });
+    chrome.__listeners.webCompleted({ tabId: 14, frameId: 0, requestId: "queued-2", timeStamp: 1200, method: "GET", url: "https://api.test/poll", statusCode: 200 });
+    const response = await new Promise((resolve) => chrome.__listeners.message({ type: "rm-get-logs", tabId: 14 }, {}, resolve));
+    const ordered = response.entries.slice().sort((a, b) => a.ts - b.ts);
+    equal(ordered.length, 2, "journal entry count");
+    equal(ordered[0].responseBody, '{"early":true}', "earlier entry consumes the closest capture");
+    equal(ordered[1].responseBody, '{"late":true}', "later entry consumes the remaining capture");
   });
 
   await check("CDP fulfills a 500 response visible to DevTools", async () => {

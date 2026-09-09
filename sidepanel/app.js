@@ -33,7 +33,9 @@
       import_summary: "Найдено правил: {count}. Совпадающих ID: {conflicts}.", import_conflicts: "При объединении правила с одинаковыми ID будут заменены.", invalid_import: "Файл не содержит корректных правил",
       hits: "срабатываний: {count}", never: "ещё не срабатывало", last_hit: "последнее: {time}",
       site_scope: "сайт", tab_scope: "вкладка", all_scope: "везде", delay_short: "+{delay} мс", selected_export: "Экспортировано правил: {count}",
-      show_repeats: "показать {count}", hide_repeats: "скрыть повторы", mode_network: "Network", mode_page: "In-page", mode_native: "Native"
+      show_repeats: "показать {count}", hide_repeats: "скрыть повторы", mode_network: "Network", mode_page: "In-page", mode_native: "Native",
+      body_hint_truncated: "Тело недоступно: ответ больше 1 МБ",
+      body_hint_missing: "Тело недоступно: ответ не был захвачен (запрос не через fetch/XHR страницы или бинарный ответ)"
     },
     en: {
       overrides: "Overrides", requests: "Requests", rules: "Rules", retry: "Retry",
@@ -64,7 +66,9 @@
       import_summary: "Found {count} rules. Matching IDs: {conflicts}.", import_conflicts: "On merge, rules with matching IDs will be replaced.", invalid_import: "The file has no valid rules",
       hits: "hits: {count}", never: "never matched", last_hit: "last: {time}",
       site_scope: "site", tab_scope: "tab", all_scope: "everywhere", delay_short: "+{delay} ms", selected_export: "Exported rules: {count}",
-      show_repeats: "show {count}", hide_repeats: "hide repeats", mode_network: "Network", mode_page: "In-page", mode_native: "Native"
+      show_repeats: "show {count}", hide_repeats: "hide repeats", mode_network: "Network", mode_page: "In-page", mode_native: "Native",
+      body_hint_truncated: "Body unavailable: response is larger than 1 MB",
+      body_hint_missing: "Body unavailable: response was not captured (request bypassed page fetch/XHR or binary response)"
     }
   };
 
@@ -88,7 +92,7 @@
     network: $("network-toggle"), mask: $("mask-toggle"), language: $("language-select"), diagnostics: $("diagnostics-btn"),
     quickMenu: $("quick-menu"), quickClose: $("quick-close"), quickTarget: $("quick-target"), customRule: $("custom-rule-btn"),
     ruleDialog: $("rule-dialog"), ruleDialogTitle: $("rule-dialog-title"), ruleClose: $("rule-close"), ruleName: $("rule-name"), ruleUrl: $("rule-url"), matchCount: $("match-count"), conflict: $("conflict-warning"),
-    ruleMethod: $("rule-method"), ruleStatus: $("rule-status"), ruleScope: $("rule-scope"), ruleStatusText: $("rule-status-text"), ruleContentType: $("rule-content-type"), ruleBody: $("rule-body"),
+    ruleMethod: $("rule-method"), ruleStatus: $("rule-status"), ruleScope: $("rule-scope"), ruleStatusText: $("rule-status-text"), ruleContentType: $("rule-content-type"), ruleBody: $("rule-body"), bodyHint: $("body-hint"),
     ruleDelay: $("rule-delay"), rulePriority: $("rule-priority"), ruleEnabled: $("rule-enabled"), formatJson: $("format-json-btn"), formError: $("form-error"), saveRule: $("save-rule-btn"), patternMode: $("pattern-mode"),
     importDialog: $("import-dialog"), importSummary: $("import-summary"), importConflicts: $("import-conflicts"), importCancel: $("import-cancel"), importReplace: $("import-replace"), importMerge: $("import-merge"),
     toast: $("toast"), toastText: $("toast-text"), toastAction: $("toast-action")
@@ -150,6 +154,12 @@
     if (mode === "network") return t("mode_network");
     if (mode === "in-page") return t("mode_page");
     return t("mode_native");
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function renderStatus() {
@@ -252,6 +262,7 @@
         <div class="request-meta">
           <span>${entry.durationMs} ms</span>
           ${entry.mocked ? `<span class="badge mocked">MOCKED</span>` : ""}
+          ${entry.responseCaptured && entry.responseBody ? `<span class="badge" title="${escapeHtml(t("response_body"))}">${escapeHtml(formatBytes(Shared.byteLength(entry.responseBody)))}</span>` : ""}
           <span class="badge ${entry.mode === "network" ? "network" : ""}">${escapeHtml(modeLabel(entry.mode))}</span>
           ${matchedRule ? `<span class="badge" title="${escapeHtml(ruleDisplayName(matchedRule))}">${escapeHtml(ruleDisplayName(matchedRule))}</span>` : ""}
           <button class="group-toggle" type="button">${group.entries.length > 1 ? escapeHtml(expanded ? t("hide_repeats") : t("show_repeats", { count: group.entries.length })) : ""}</button>
@@ -444,6 +455,12 @@
     els.conflict.textContent = conflict ? t("conflict", { name: ruleDisplayName(conflict) }) : "";
   }
 
+  function bodyHintFor(entry) {
+    if (!entry || entry.responseCaptured) return "";
+    if (entry.responseBodyTruncated) return t("body_hint_truncated");
+    return t("body_hint_missing");
+  }
+
   function openRuleDialog({ entry = null, rule = null } = {}) {
     closeQuickMenu();
     state.sourceEntry = entry;
@@ -456,6 +473,9 @@
     els.ruleStatusText.value = rule ? rule.statusText : Shared.defaultStatusText(Number(els.ruleStatus.value));
     els.ruleContentType.value = rule ? rule.contentType : entry && entry.responseContentType ? entry.responseContentType : "application/json; charset=utf-8";
     els.ruleBody.value = rule ? rule.body : entry && entry.responseCaptured ? entry.responseBody : "";
+    const hint = rule ? "" : bodyHintFor(entry);
+    els.bodyHint.textContent = hint;
+    els.bodyHint.classList.toggle("hidden", !hint);
     els.ruleDelay.value = rule ? rule.delayMs : 0;
     els.rulePriority.value = rule ? rule.priority : nextPriority();
     els.ruleEnabled.checked = rule ? rule.enabled : true;
@@ -623,13 +643,31 @@
     showToast(t("imported"));
   }
 
+  function shouldReplaceLog(current, incoming) {
+    if (!!incoming.responseCaptured !== !!current.responseCaptured) return incoming.responseCaptured;
+    return incoming.ts > current.ts;
+  }
+
+  function mergeLogs(existing, incoming) {
+    const byId = new Map();
+    for (const entry of existing) byId.set(entry.id, entry);
+    for (const entry of incoming) {
+      const current = byId.get(entry.id);
+      if (!current || shouldReplaceLog(current, entry)) byId.set(entry.id, entry);
+    }
+    return Array.from(byId.values()).sort((a, b) => a.ts - b.ts).slice(-LIMITS.maxLogs);
+  }
+
   async function refreshContextAndLogs() {
     try {
       const previousTabId = state.currentTabId;
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       const tab = tabs[0];
       state.currentTabId = tab && tab.id != null ? tab.id : null;
-      if (previousTabId !== state.currentTabId) state.pendingCaptures = [];
+      if (previousTabId !== state.currentTabId) {
+        state.pendingCaptures = [];
+        state.logs = [];
+      }
       state.currentPageUrl = tab && tab.url ? tab.url : "";
       state.currentOrigin = Shared.normalizeOrigin(state.currentPageUrl);
       els.pageLabel.textContent = state.currentOrigin ? new URL(state.currentOrigin).host : t("status_unavailable");
@@ -637,7 +675,8 @@
         chrome.runtime.sendMessage({ type: "rm-get-logs", tabId: state.currentTabId }),
         chrome.runtime.sendMessage({ type: "rm-net-status", tabId: state.currentTabId })
       ]);
-      state.logs = Array.isArray(logsResponse && logsResponse.entries) ? logsResponse.entries.map(Shared.normalizeLog).filter(Boolean) : [];
+      const history = Array.isArray(logsResponse && logsResponse.entries) ? logsResponse.entries.map(Shared.normalizeLog).filter(Boolean) : [];
+      state.logs = mergeLogs(state.logs, history);
       if (statusResponse) state.netStatus = statusResponse;
     } catch (_error) {
       state.netStatus = { status: "unavailable", error: null, applicableRuleCount: 0 };

@@ -16,5 +16,7 @@ Expected:
 - disabling the master switch immediately restores native `200`;
 - **Slow 200** adds approximately 2000 ms to the request;
 - after closing/reopening the side panel, the request history is restored;
+- clicking a non-mocked request row prefills the "Response body" input with the original response (Chrome 145 regression);
+- repeated/parallel identical requests keep their own bodies when opened;
 - XHR JSON returns an object when using the in-page fallback;
 - the burst groups repeated endpoints and the panel stays responsive.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.6
+
+- Fixed response body capture on Chrome 145+: Chrome now dedupes injected content-script files across manifest entries, which silently dropped `shared.js` from the MAIN world, disabled fetch/XHR instrumentation, and left the rule body input empty. `shared.js` now loads only in the MAIN-world entry (`content-bridge.js` never used it).
+- Response captures now enrich the journal entry with the closest timestamp, so parallel identical requests get their own bodies instead of borrowing each other's.
+- The side panel merges restored history with live entries instead of replacing them, keeping enriched bodies across tab activation and navigation refreshes.
+- The rule dialog explains why a response body is unavailable (larger than 1 MB or not captured), and request rows show the captured body size.
+- Added capture and enrichment counters to diagnostics for faster troubleshooting.
+
 ## 1.2.5
 
 - Added a canonical versioned rule/log schema with lossless migration from legacy `delay` and `duration` fields.

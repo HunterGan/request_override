@@ -11,6 +11,7 @@ const pendingResponseCaptures = new Map();
 const regexCache = new Map();
 const ruleStats = new Map();
 const pausedLog = [];
+const captureStats = { received: 0, applied: 0, queued: 0, consumed: 0, lastQueued: null };
 
 let rules = [];
 let rulesLoaded = false;
@@ -75,6 +76,7 @@ function sameCapturedRequest(entry, capture) {
 }
 
 function applyResponseCapture(tabId, entry, capture) {
+  captureStats.applied += 1;
   entry.responseCaptured = capture.responseCaptured;
   entry.responseBody = capture.responseBody;
   entry.responseContentType = capture.responseContentType;
@@ -87,26 +89,47 @@ function applyResponseCapture(tabId, entry, capture) {
   chrome.runtime.sendMessage({ type: "rm-log-live", entry, tabId }).catch(() => {});
 }
 
+function bestResponseCaptureMatch(candidates, capture, isMatch, timestampOf) {
+  let best = null;
+  let bestIndex = -1;
+  let bestDelta = Infinity;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!isMatch(candidate, capture)) continue;
+    const delta = Math.abs(timestampOf(candidate) - capture.ts);
+    if (delta < bestDelta) {
+      best = candidate;
+      bestIndex = index;
+      bestDelta = delta;
+    }
+  }
+  return best == null ? { best: null, bestIndex } : { best, bestIndex };
+}
+
 function enrichOrQueueResponseCapture(tabId, capture) {
+  captureStats.received += 1;
   chrome.runtime.sendMessage({ type: "rm-log-capture", tabId, capture }).catch(() => {});
   const buffer = logBuffers.get(tabId) || [];
-  const entry = buffer.slice().reverse().find((candidate) => !candidate.responseCaptured && sameCapturedRequest(candidate, capture));
-  if (entry) {
-    applyResponseCapture(tabId, entry, capture);
+  const { best } = bestResponseCaptureMatch(buffer, capture, (candidate) => !candidate.responseCaptured && sameCapturedRequest(candidate, capture), (candidate) => candidate.ts);
+  if (best) {
+    applyResponseCapture(tabId, best, capture);
     return;
   }
   const queue = pendingResponseCaptures.get(tabId) || [];
   queue.push(capture);
   pendingResponseCaptures.set(tabId, queue.slice(-50));
+  captureStats.queued += 1;
+  captureStats.lastQueued = { tabId, ts: capture.ts, url: capture.url, method: capture.method, bufferEntries: buffer.length };
 }
 
 function consumeResponseCapture(tabId, entry) {
   const queue = pendingResponseCaptures.get(tabId);
   if (!queue || !queue.length) return;
-  const index = queue.findIndex((capture) => sameCapturedRequest(entry, capture));
-  if (index < 0) return;
-  const [capture] = queue.splice(index, 1);
+  const { bestIndex } = bestResponseCaptureMatch(queue, entry, (capture) => sameCapturedRequest(entry, capture), (capture) => capture.ts);
+  if (bestIndex < 0) return;
+  const [capture] = queue.splice(bestIndex, 1);
   if (!queue.length) pendingResponseCaptures.delete(tabId);
+  captureStats.consumed += 1;
   applyResponseCapture(tabId, entry, capture);
 }
 
@@ -698,6 +721,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       schemaVersion: Shared.SCHEMA_VERSION,
       overridesEnabled,
       netMode,
+      captureStats,
+      pendingCaptures: Array.from(pendingResponseCaptures.values()).reduce((total, queue) => total + queue.length, 0),
       rulesCount: rules.length,
       networkTabs: Array.from(tabStates.values()).map((state) => ({
         tabId: state.tabId, url: state.url, attached: state.attached, fetchEnabled: state.fetchEnabled,
